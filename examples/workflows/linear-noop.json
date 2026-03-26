@@ -1,0 +1,19 @@
+{
+  "name": "linear-noop",
+  "nodes": [
+    {
+      "id": "A",
+      "activity_type": "noop"
+    },
+    {
+      "id": "B",
+      "activity_type": "noop",
+      "depends_on": ["A"]
+    },
+    {
+      "id": "C",
+      "activity_type": "noop",
+      "depends_on": ["B"]
+    }
+  ]
+}

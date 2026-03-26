@@ -10,6 +10,40 @@ Built for the SDLC. Designed to be embedded. Ships as a single binary.
 
 ---
 
+## Quick Start
+
+Build the CLI:
+
+```bash
+go build ./cmd/grael
+```
+
+Start a built-in example run:
+
+```bash
+./grael start -example linear-noop
+```
+
+Inspect current state:
+
+```bash
+./grael status -run-id <RUN_ID>
+```
+
+Inspect raw event history:
+
+```bash
+./grael events -run-id <RUN_ID>
+```
+
+You can also start from a workflow file:
+
+```bash
+./grael start -workflow examples/workflows/linear-noop.json
+```
+
+---
+
 ## The name
 
 *Grael* is a variation of *grail* — the vessel that holds something rare and essential.
