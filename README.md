@@ -21,8 +21,11 @@ go build ./cmd/grael
 Start a built-in example run:
 
 ```bash
-./grael start -example linear-noop
+./grael start -workflow examples/workflows/linear-noop.json -demo-worker
 ```
+
+`-demo-worker` starts a tiny in-process worker so the CLI exercises the same
+worker polling and completion surface as normal execution.
 
 Inspect current state:
 
@@ -36,10 +39,10 @@ Inspect raw event history:
 ./grael events -run-id <RUN_ID>
 ```
 
-You can also start from a workflow file:
+You can also start from your own workflow file:
 
 ```bash
-./grael start -workflow examples/workflows/linear-noop.json
+./grael start -workflow /path/to/workflow.json
 ```
 
 Today the CLI accepts workflow files in JSON, but JSON is only an ingress

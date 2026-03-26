@@ -20,6 +20,26 @@ func (s *Service) StartRun(def rt.WorkflowDefinition, input map[string]any) (str
 	return s.engine.StartRun(def, input)
 }
 
+func (s *Service) RegisterWorker(workerID string, activities []rt.ActivityType) error {
+	return s.engine.RegisterWorker(workerID, activities)
+}
+
+func (s *Service) PollTask(workerID string, timeout time.Duration) (rt.WorkerTask, bool, error) {
+	return s.engine.PollTask(workerID, timeout)
+}
+
+func (s *Service) CompleteTask(req rt.CompleteTaskRequest) error {
+	return s.engine.CompleteTask(req)
+}
+
+func (s *Service) FailTask(req rt.FailTaskRequest) error {
+	return s.engine.FailTask(req)
+}
+
+func (s *Service) Heartbeat(workerID string) error {
+	return s.engine.Heartbeat(workerID)
+}
+
 func (s *Service) GetRun(runID string) (rt.RunView, error) {
 	return s.engine.GetRun(runID)
 }

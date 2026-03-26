@@ -8,141 +8,241 @@ import (
 	rt "grael/internal/runtime"
 )
 
-func TestStartRunGetRunAndListEvents(t *testing.T) {
+func TestWorkerPollCompleteFinishesRun(t *testing.T) {
 	t.Parallel()
 
 	svc := api.New(t.TempDir())
+	if err := svc.RegisterWorker("worker-1", []rt.ActivityType{"hello"}); err != nil {
+		t.Fatalf("register worker: %v", err)
+	}
+
 	runID, err := svc.StartRun(rt.WorkflowDefinition{
-		Name: "linear-noop",
+		Name: "hello-run",
 		Nodes: []rt.NodeDefinition{
-			{ID: "A", ActivityType: rt.ActivityTypeNoop},
-			{ID: "B", ActivityType: rt.ActivityTypeNoop, DependsOn: []string{"A"}},
-			{ID: "C", ActivityType: rt.ActivityTypeNoop, DependsOn: []string{"B"}},
+			{ID: "A", ActivityType: "hello"},
 		},
-	}, nil)
+	}, map[string]any{"name": "grael"})
 	if err != nil {
 		t.Fatalf("start run: %v", err)
 	}
 
-	view := eventuallyGetCompletedRun(t, svc, runID)
-
-	events, err := svc.ListEvents(runID)
+	task, ok, err := svc.PollTask("worker-1", 250*time.Millisecond)
 	if err != nil {
-		t.Fatalf("list events: %v", err)
+		t.Fatalf("poll task: %v", err)
 	}
-	if len(events) == 0 {
-		t.Fatal("expected non-empty event history")
+	if !ok {
+		t.Fatal("expected worker to receive a task")
 	}
-	if events[0].Type != rt.EventWorkflowStarted {
-		t.Fatalf("expected first event WorkflowStarted, got %s", events[0].Type)
-	}
-	if events[len(events)-1].Type != rt.EventWorkflowCompleted {
-		t.Fatalf("expected last event WorkflowCompleted, got %s", events[len(events)-1].Type)
-	}
-	if view.LastSeq == 0 {
-		t.Fatal("expected completed view to include applied events")
-	}
-}
-
-func TestGetRunCanObserveActiveNonTerminalRun(t *testing.T) {
-	t.Parallel()
-
-	svc := api.New(t.TempDir())
-	runID, err := svc.StartRun(rt.WorkflowDefinition{
-		Name: "hold-run",
-		Nodes: []rt.NodeDefinition{
-			{ID: "A", ActivityType: rt.ActivityTypeHold},
-		},
-	}, nil)
-	if err != nil {
-		t.Fatalf("start run: %v", err)
+	if task.RunID != runID || task.NodeID != "A" || task.ActivityType != "hello" || task.Attempt != 1 {
+		t.Fatalf("unexpected task: %+v", task)
 	}
 
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		view, err := svc.GetRun(runID)
-		if err != nil {
-			t.Fatalf("get run: %v", err)
-		}
-		if view.State == rt.RunStateRunning && view.Nodes["A"].State == rt.NodeStateRunning {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
+	if err := svc.CompleteTask(rt.CompleteTaskRequest{
+		WorkerID: "worker-1",
+		RunID:    task.RunID,
+		NodeID:   task.NodeID,
+		Attempt:  task.Attempt,
+		Output:   map[string]any{"status": "ok"},
+	}); err != nil {
+		t.Fatalf("complete task: %v", err)
 	}
 
 	view, err := svc.GetRun(runID)
 	if err != nil {
 		t.Fatalf("get run: %v", err)
 	}
-	t.Fatalf("expected active running node, got run=%s node=%s", view.State, view.Nodes["A"].State)
+	if view.State != rt.RunStateCompleted {
+		t.Fatalf("expected completed run, got %s", view.State)
+	}
+	if got := view.Nodes["A"].State; got != rt.NodeStateCompleted {
+		t.Fatalf("expected node A completed, got %s", got)
+	}
+
+	events, err := svc.ListEvents(runID)
+	if err != nil {
+		t.Fatalf("list events: %v", err)
+	}
+	assertEventSequence(t, events, []rt.EventType{
+		rt.EventWorkflowStarted,
+		rt.EventLeaseGranted,
+		rt.EventNodeStarted,
+		rt.EventNodeCompleted,
+		rt.EventWorkflowCompleted,
+	})
 }
 
-func TestGetRunRehydratesFromSnapshotAndWalDelta(t *testing.T) {
+func TestLinearWorkflowRespectsDependenciesThroughWorkerSurface(t *testing.T) {
 	t.Parallel()
 
-	dir := t.TempDir()
-	svc := api.New(dir)
+	svc := api.New(t.TempDir())
+	if err := svc.RegisterWorker("worker-1", []rt.ActivityType{"step"}); err != nil {
+		t.Fatalf("register worker: %v", err)
+	}
+
 	runID, err := svc.StartRun(rt.WorkflowDefinition{
-		Name: "linear-noop",
+		Name: "linear-steps",
 		Nodes: []rt.NodeDefinition{
-			{ID: "A", ActivityType: rt.ActivityTypeNoop},
-			{ID: "B", ActivityType: rt.ActivityTypeNoop, DependsOn: []string{"A"}},
+			{ID: "A", ActivityType: "step"},
+			{ID: "B", ActivityType: "step", DependsOn: []string{"A"}},
+			{ID: "C", ActivityType: "step", DependsOn: []string{"B"}},
 		},
 	}, nil)
 	if err != nil {
 		t.Fatalf("start run: %v", err)
 	}
 
-	view := eventuallyGetCompletedRunByIDs(t, svc, runID, []string{"A", "B"})
+	for _, nodeID := range []string{"A", "B", "C"} {
+		task, ok, err := svc.PollTask("worker-1", 250*time.Millisecond)
+		if err != nil {
+			t.Fatalf("poll task for %s: %v", nodeID, err)
+		}
+		if !ok {
+			t.Fatalf("expected task for node %s", nodeID)
+		}
+		if task.NodeID != nodeID {
+			t.Fatalf("expected node %s, got %s", nodeID, task.NodeID)
+		}
+		if err := svc.CompleteTask(rt.CompleteTaskRequest{
+			WorkerID: "worker-1",
+			RunID:    task.RunID,
+			NodeID:   task.NodeID,
+			Attempt:  task.Attempt,
+			Output:   map[string]any{"node": nodeID},
+		}); err != nil {
+			t.Fatalf("complete task %s: %v", nodeID, err)
+		}
+	}
+
+	view, err := svc.GetRun(runID)
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
 	if view.State != rt.RunStateCompleted {
 		t.Fatalf("expected completed run, got %s", view.State)
 	}
 
-	// Simulate a fresh process by recreating the service against the same data dir.
+	events, err := svc.ListEvents(runID)
+	if err != nil {
+		t.Fatalf("list events: %v", err)
+	}
+	assertEventSequence(t, events, []rt.EventType{
+		rt.EventWorkflowStarted,
+		rt.EventLeaseGranted,
+		rt.EventNodeStarted,
+		rt.EventNodeCompleted,
+		rt.EventLeaseGranted,
+		rt.EventNodeStarted,
+		rt.EventNodeCompleted,
+		rt.EventLeaseGranted,
+		rt.EventNodeStarted,
+		rt.EventNodeCompleted,
+		rt.EventWorkflowCompleted,
+	})
+}
+
+func TestGetRunRehydratesAttemptStateFromSnapshotAndWalDelta(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	svc := api.New(dir)
+	if err := svc.RegisterWorker("worker-1", []rt.ActivityType{"hello"}); err != nil {
+		t.Fatalf("register worker: %v", err)
+	}
+
+	runID, err := svc.StartRun(rt.WorkflowDefinition{
+		Name: "rehydrate-worker-run",
+		Nodes: []rt.NodeDefinition{
+			{ID: "A", ActivityType: "hello"},
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("start run: %v", err)
+	}
+
+	task, ok, err := svc.PollTask("worker-1", 250*time.Millisecond)
+	if err != nil {
+		t.Fatalf("poll task: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected task to be dispatched")
+	}
+	if err := svc.CompleteTask(rt.CompleteTaskRequest{
+		WorkerID: "worker-1",
+		RunID:    task.RunID,
+		NodeID:   task.NodeID,
+		Attempt:  task.Attempt,
+		Output:   map[string]any{"status": "ok"},
+	}); err != nil {
+		t.Fatalf("complete task: %v", err)
+	}
+
 	svc = api.New(dir)
-	view, err = svc.GetRun(runID)
+	view, err := svc.GetRun(runID)
 	if err != nil {
 		t.Fatalf("get run after recreate: %v", err)
 	}
 	if view.State != rt.RunStateCompleted {
 		t.Fatalf("expected completed run after rehydrate, got %s", view.State)
 	}
-	for _, nodeID := range []string{"A", "B"} {
-		if got := view.Nodes[nodeID].State; got != rt.NodeStateCompleted {
-			t.Fatalf("expected node %s completed after rehydrate, got %s", nodeID, got)
-		}
+	if node := view.Nodes["A"]; node.Attempt != 1 || node.State != rt.NodeStateCompleted {
+		t.Fatalf("unexpected rehydrated node view: %+v", node)
 	}
 }
 
-func eventuallyGetCompletedRun(t *testing.T, svc *api.Service, runID string) rt.RunView {
-	t.Helper()
-	return eventuallyGetCompletedRunByIDs(t, svc, runID, []string{"A", "B", "C"})
-}
+func TestCompleteTaskRejectsMismatchedAttempt(t *testing.T) {
+	t.Parallel()
 
-func eventuallyGetCompletedRunByIDs(t *testing.T, svc *api.Service, runID string, nodeIDs []string) rt.RunView {
-	t.Helper()
+	svc := api.New(t.TempDir())
+	if err := svc.RegisterWorker("worker-1", []rt.ActivityType{"hello"}); err != nil {
+		t.Fatalf("register worker: %v", err)
+	}
 
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		view, err := svc.GetRun(runID)
-		if err != nil {
-			t.Fatalf("get run: %v", err)
-		}
-		if view.State == rt.RunStateCompleted {
-			for _, nodeID := range nodeIDs {
-				if got := view.Nodes[nodeID].State; got != rt.NodeStateCompleted {
-					t.Fatalf("expected node %s completed, got %s", nodeID, got)
-				}
-			}
-			return view
-		}
-		time.Sleep(10 * time.Millisecond)
+	runID, err := svc.StartRun(rt.WorkflowDefinition{
+		Name: "attempt-check",
+		Nodes: []rt.NodeDefinition{
+			{ID: "A", ActivityType: "hello"},
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("start run: %v", err)
+	}
+
+	task, ok, err := svc.PollTask("worker-1", 250*time.Millisecond)
+	if err != nil {
+		t.Fatalf("poll task: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected task to be dispatched")
+	}
+
+	err = svc.CompleteTask(rt.CompleteTaskRequest{
+		WorkerID: "worker-1",
+		RunID:    runID,
+		NodeID:   "A",
+		Attempt:  task.Attempt + 1,
+	})
+	if err == nil {
+		t.Fatal("expected mismatched attempt to be rejected")
 	}
 
 	view, err := svc.GetRun(runID)
 	if err != nil {
 		t.Fatalf("get run: %v", err)
 	}
-	t.Fatalf("expected completed run, got %s", view.State)
-	return rt.RunView{}
+	if got := view.Nodes["A"].State; got != rt.NodeStateRunning {
+		t.Fatalf("expected node to remain running, got %s", got)
+	}
+}
+
+func assertEventSequence(t *testing.T, events []rt.Event, want []rt.EventType) {
+	t.Helper()
+
+	if len(events) != len(want) {
+		t.Fatalf("expected %d events, got %d", len(want), len(events))
+	}
+	for i, expected := range want {
+		if events[i].Type != expected {
+			t.Fatalf("expected event %d to be %s, got %s", i, expected, events[i].Type)
+		}
+	}
 }

@@ -11,6 +11,7 @@ import (
 type ExecutionState struct {
 	RunID      string
 	Workflow   string
+	Input      map[string]any
 	RunState   rt.RunState
 	CreatedAt  time.Time
 	FinishedAt *time.Time
@@ -23,6 +24,9 @@ type Node struct {
 	ActivityType rt.ActivityType
 	DependsOn    []string
 	State        rt.NodeState
+	Attempt      uint32
+	WorkerID     string
+	LastError    string
 	Output       map[string]any
 }
 
@@ -52,6 +56,7 @@ func (s *ExecutionState) Apply(event rt.Event) error {
 		payload := event.Payload.(rt.WorkflowStartedPayload)
 		s.RunID = event.RunID
 		s.Workflow = payload.Workflow.Name
+		s.Input = payload.Input
 		s.RunState = rt.RunStateRunning
 		s.CreatedAt = event.Timestamp
 		for _, def := range payload.Workflow.Nodes {
@@ -65,6 +70,15 @@ func (s *ExecutionState) Apply(event rt.Event) error {
 		// Readiness is derived, not stored independently. Recomputing it here keeps
 		// the state model reconstructable from the event log alone.
 		s.markReadyNodes()
+	case rt.EventLeaseGranted:
+		payload := event.Payload.(rt.LeaseGrantedPayload)
+		node, ok := s.Nodes[payload.NodeID]
+		if !ok {
+			return fmt.Errorf("lease granted for unknown node %q", payload.NodeID)
+		}
+		node.Attempt = payload.Attempt
+		node.WorkerID = payload.WorkerID
+		node.LastError = ""
 	case rt.EventNodeReady:
 		payload := event.Payload.(rt.NodeReadyPayload)
 		node, ok := s.Nodes[payload.NodeID]
@@ -80,6 +94,8 @@ func (s *ExecutionState) Apply(event rt.Event) error {
 		if !ok {
 			return fmt.Errorf("node started for unknown node %q", payload.NodeID)
 		}
+		node.Attempt = payload.Attempt
+		node.WorkerID = payload.WorkerID
 		node.State = rt.NodeStateRunning
 	case rt.EventNodeCompleted:
 		payload := event.Payload.(rt.NodeCompletedPayload)
@@ -88,8 +104,21 @@ func (s *ExecutionState) Apply(event rt.Event) error {
 			return fmt.Errorf("node completed for unknown node %q", payload.NodeID)
 		}
 		node.State = rt.NodeStateCompleted
+		node.WorkerID = payload.WorkerID
+		node.Attempt = payload.Attempt
+		node.LastError = ""
 		node.Output = payload.Output
 		s.markReadyNodes()
+	case rt.EventNodeFailed:
+		payload := event.Payload.(rt.NodeFailedPayload)
+		node, ok := s.Nodes[payload.NodeID]
+		if !ok {
+			return fmt.Errorf("node failed for unknown node %q", payload.NodeID)
+		}
+		node.State = rt.NodeStateFailed
+		node.WorkerID = payload.WorkerID
+		node.Attempt = payload.Attempt
+		node.LastError = payload.Message
 	case rt.EventWorkflowCompleted:
 		s.RunState = rt.RunStateCompleted
 		finishedAt := event.Timestamp
@@ -135,6 +164,9 @@ func (s *ExecutionState) View() rt.RunView {
 			ActivityType: node.ActivityType,
 			State:        node.State,
 			DependsOn:    slices.Clone(node.DependsOn),
+			Attempt:      node.Attempt,
+			WorkerID:     node.WorkerID,
+			LastError:    node.LastError,
 		}
 	}
 	return rt.RunView{

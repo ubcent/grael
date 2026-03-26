@@ -1,11 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"os"
+	"slices"
 	"time"
 
 	"grael/internal/api"
@@ -46,6 +48,7 @@ func startRun(args []string) error {
 	dataDir := fs.String("data-dir", ".grael-data", "directory for Grael WAL data")
 	workflowFile := fs.String("workflow", "", "path to workflow JSON file")
 	example := fs.String("example", "", "name of built-in example workflow")
+	demoWorker := fs.Bool("demo-worker", false, "start an in-process demo worker for the workflow activity types")
 	waitTimeout := fs.Duration("wait-timeout", 2*time.Second, "maximum time to wait for the initial run pass before exiting")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -71,12 +74,23 @@ func startRun(args []string) error {
 	}
 
 	svc := api.New(*dataDir)
+	if *demoWorker {
+		if err := startDemoWorker(svc, def); err != nil {
+			return err
+		}
+	}
 	runID, err := svc.StartRun(def, nil)
 	if err != nil {
 		return err
 	}
-	if _, err := svc.WaitForQuiescence(runID, *waitTimeout); err != nil {
-		return err
+	if *demoWorker {
+		if err := waitForTerminalRun(svc, runID, *waitTimeout); err != nil {
+			return err
+		}
+	} else {
+		if _, err := svc.WaitForQuiescence(runID, *waitTimeout); err != nil {
+			return err
+		}
 	}
 
 	fmt.Println(runID)
@@ -150,7 +164,7 @@ func printUsage() {
 	fmt.Println(`grael
 
 Commands:
-  start  (-workflow <file> | -example <name>) [-data-dir <dir>] [-wait-timeout <duration>]
+  start  (-workflow <file> | -example <name>) [-demo-worker] [-data-dir <dir>] [-wait-timeout <duration>]
   status -run-id <id> [-data-dir <dir>]
   events -run-id <id> [-data-dir <dir>]
   snapshot -run-id <id> [-data-dir <dir>]
@@ -166,4 +180,92 @@ Workflow definition example (JSON ingress format):
 
 Built-in examples:
   linear-noop`)
+}
+
+func startDemoWorker(svc *api.Service, def rt.WorkflowDefinition) error {
+	activities := make([]rt.ActivityType, 0, len(def.Nodes))
+	seen := map[rt.ActivityType]struct{}{}
+	for _, node := range def.Nodes {
+		if _, ok := seen[node.ActivityType]; ok {
+			continue
+		}
+		seen[node.ActivityType] = struct{}{}
+		activities = append(activities, node.ActivityType)
+	}
+	slices.Sort(activities)
+
+	const workerID = "demo-worker"
+	if err := svc.RegisterWorker(workerID, activities); err != nil {
+		return err
+	}
+
+	go func() {
+		idleRounds := 0
+		for idleRounds < 5 {
+			task, ok, err := svc.PollTask(workerID, 50*time.Millisecond)
+			if err != nil {
+				return
+			}
+			if !ok {
+				idleRounds++
+				continue
+			}
+			idleRounds = 0
+			_ = svc.CompleteTask(rt.CompleteTaskRequest{
+				WorkerID: workerID,
+				RunID:    task.RunID,
+				NodeID:   task.NodeID,
+				Attempt:  task.Attempt,
+				Output: map[string]any{
+					"status": "ok",
+				},
+			})
+		}
+	}()
+
+	return nil
+}
+
+func waitForTerminalRun(svc *api.Service, runID string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		view, err := svc.GetRun(runID)
+		if err != nil {
+			return err
+		}
+		if view.State != rt.RunStateRunning {
+			return nil
+		}
+		if timeout > 0 && time.Now().After(deadline) {
+			return fmt.Errorf("timed out waiting for run %s to reach terminal state", runID)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func stdoutString(fn func() error) (string, error) {
+	original := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		return "", err
+	}
+	os.Stdout = w
+	defer func() {
+		os.Stdout = original
+	}()
+
+	callErr := fn()
+	if err := w.Close(); err != nil && callErr == nil {
+		callErr = err
+	}
+
+	var buf bytes.Buffer
+	if _, err := buf.ReadFrom(r); err != nil && callErr == nil {
+		callErr = err
+	}
+	if err := r.Close(); err != nil && callErr == nil {
+		callErr = err
+	}
+
+	return buf.String(), callErr
 }

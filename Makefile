@@ -17,7 +17,7 @@ clean:
 	rm -rf bin .gocache
 
 example-start: build
-	./$(BINARY) start -example linear-noop
+	./$(BINARY) start -workflow examples/workflows/linear-noop.json -demo-worker
 
 example-status: build
 	@echo "usage: make example-status RUN_ID=<run-id>"

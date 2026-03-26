@@ -169,6 +169,12 @@ func decodePayload(eventType rt.EventType, raw json.RawMessage) (interface{}, er
 			return nil, err
 		}
 		return payload, nil
+	case rt.EventLeaseGranted:
+		var payload rt.LeaseGrantedPayload
+		if err := json.Unmarshal(raw, &payload); err != nil {
+			return nil, err
+		}
+		return payload, nil
 	case rt.EventNodeReady:
 		var payload rt.NodeReadyPayload
 		if err := json.Unmarshal(raw, &payload); err != nil {
@@ -183,6 +189,12 @@ func decodePayload(eventType rt.EventType, raw json.RawMessage) (interface{}, er
 		return payload, nil
 	case rt.EventNodeCompleted:
 		var payload rt.NodeCompletedPayload
+		if err := json.Unmarshal(raw, &payload); err != nil {
+			return nil, err
+		}
+		return payload, nil
+	case rt.EventNodeFailed:
+		var payload rt.NodeFailedPayload
 		if err := json.Unmarshal(raw, &payload); err != nil {
 			return nil, err
 		}

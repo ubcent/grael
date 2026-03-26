@@ -1,6 +1,7 @@
 package workflowdef
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -26,10 +27,22 @@ func TestBuiltInLinearNoop(t *testing.T) {
 	}
 }
 
-func TestLoadJSONExample(t *testing.T) {
+func TestLoadJSON(t *testing.T) {
 	t.Parallel()
 
-	def, err := LoadJSON(filepath.Join("..", "..", "examples", "workflows", "linear-noop.json"))
+	dir := t.TempDir()
+	path := filepath.Join(dir, "workflow.json")
+	if err := os.WriteFile(path, []byte(`{
+  "name": "linear-noop",
+  "nodes": [
+    {"id": "A", "activity_type": "noop"},
+    {"id": "B", "activity_type": "noop", "depends_on": ["A"]}
+  ]
+}`), 0o644); err != nil {
+		t.Fatalf("write workflow json: %v", err)
+	}
+
+	def, err := LoadJSON(path)
 	if err != nil {
 		t.Fatalf("LoadJSON returned error: %v", err)
 	}
