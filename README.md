@@ -42,6 +42,11 @@ You can also start from a workflow file:
 ./grael start -workflow examples/workflows/linear-noop.json
 ```
 
+Today the CLI accepts workflow files in JSON, but JSON is only an ingress
+format. Grael normalizes input into its canonical internal workflow model
+before runtime execution, which keeps the engine decoupled from authoring
+format choices.
+
 ---
 
 ## The name

@@ -2,14 +2,16 @@ package main
 
 import (
 	"testing"
+
+	"grael/internal/workflowdef"
 )
 
 func TestBuiltInExampleLinearNoop(t *testing.T) {
 	t.Parallel()
 
-	def, err := builtInExample("linear-noop")
+	def, err := workflowdef.BuiltIn("linear-noop")
 	if err != nil {
-		t.Fatalf("builtInExample returned error: %v", err)
+		t.Fatalf("BuiltIn returned error: %v", err)
 	}
 
 	if def.Name != "linear-noop" {

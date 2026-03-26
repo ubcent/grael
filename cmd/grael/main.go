@@ -6,11 +6,11 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"path/filepath"
 	"time"
 
 	"grael/internal/api"
 	rt "grael/internal/runtime"
+	"grael/internal/workflowdef"
 )
 
 func main() {
@@ -62,9 +62,9 @@ func startRun(args []string) error {
 		err error
 	)
 	if *example != "" {
-		def, err = builtInExample(*example)
+		def, err = workflowdef.BuiltIn(*example)
 	} else {
-		def, err = loadWorkflow(*workflowFile)
+		def, err = workflowdef.LoadJSON(*workflowFile)
 	}
 	if err != nil {
 		return err
@@ -140,32 +140,6 @@ func snapshotInfo(args []string) error {
 	return printJSON(info)
 }
 
-func loadWorkflow(path string) (rt.WorkflowDefinition, error) {
-	content, err := os.ReadFile(filepath.Clean(path))
-	if err != nil {
-		return rt.WorkflowDefinition{}, fmt.Errorf("read workflow file: %w", err)
-	}
-	var def rt.WorkflowDefinition
-	if err := json.Unmarshal(content, &def); err != nil {
-		return rt.WorkflowDefinition{}, fmt.Errorf("decode workflow file: %w", err)
-	}
-	if def.Name == "" {
-		return rt.WorkflowDefinition{}, errors.New("workflow name is required")
-	}
-	if len(def.Nodes) == 0 {
-		return rt.WorkflowDefinition{}, errors.New("workflow must contain at least one node")
-	}
-	for _, node := range def.Nodes {
-		if node.ID == "" {
-			return rt.WorkflowDefinition{}, errors.New("every node must have an id")
-		}
-		if node.ActivityType == "" {
-			return rt.WorkflowDefinition{}, fmt.Errorf("node %q must define activity_type", node.ID)
-		}
-	}
-	return def, nil
-}
-
 func printJSON(v any) error {
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
@@ -181,7 +155,7 @@ Commands:
   events -run-id <id> [-data-dir <dir>]
   snapshot -run-id <id> [-data-dir <dir>]
 
-Workflow JSON example:
+Workflow definition example (JSON ingress format):
 {
   "name": "linear-noop",
   "nodes": [
@@ -192,20 +166,4 @@ Workflow JSON example:
 
 Built-in examples:
   linear-noop`)
-}
-
-func builtInExample(name string) (rt.WorkflowDefinition, error) {
-	switch name {
-	case "linear-noop":
-		return rt.WorkflowDefinition{
-			Name: "linear-noop",
-			Nodes: []rt.NodeDefinition{
-				{ID: "A", ActivityType: rt.ActivityTypeNoop},
-				{ID: "B", ActivityType: rt.ActivityTypeNoop, DependsOn: []string{"A"}},
-				{ID: "C", ActivityType: rt.ActivityTypeNoop, DependsOn: []string{"B"}},
-			},
-		}, nil
-	default:
-		return rt.WorkflowDefinition{}, fmt.Errorf("unknown built-in example %q", name)
-	}
 }
