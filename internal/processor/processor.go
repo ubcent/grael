@@ -17,6 +17,8 @@ func New(store *wal.Store) *Processor {
 	return &Processor{wal: store}
 }
 
+// Execute turns scheduler commands into persisted events. A command that no
+// longer matches the current state becomes a no-op rather than forcing state.
 func (p *Processor) Execute(st *state.ExecutionState, cmd rt.Command) ([]rt.Event, error) {
 	switch cmd.Type {
 	case rt.CommandStartNode:

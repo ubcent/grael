@@ -35,6 +35,7 @@ type diskRecord struct {
 	CRC32     uint32          `json:"crc32"`
 }
 
+// Append persists exactly one event at the next durable sequence number.
 func (s *Store) Append(event rt.Event) (rt.Event, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -86,6 +87,7 @@ func (s *Store) Append(event rt.Event) (rt.Event, error) {
 	return event, nil
 }
 
+// List returns the valid persisted prefix of the run history.
 func (s *Store) List(runID string) ([]rt.Event, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -157,6 +159,8 @@ func checksum(record diskRecord) uint32 {
 	return crc32.ChecksumIEEE(payload)
 }
 
+// decodePayload reconstructs typed payloads so replay operates on the same
+// event shapes as live execution.
 func decodePayload(eventType rt.EventType, raw json.RawMessage) (interface{}, error) {
 	switch eventType {
 	case rt.EventWorkflowStarted:

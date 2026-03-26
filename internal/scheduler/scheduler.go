@@ -13,6 +13,8 @@ func New() *Scheduler {
 	return &Scheduler{}
 }
 
+// Decide is a pure function over derived state. It must not read time, perform
+// I/O, or depend on map iteration order.
 func (s *Scheduler) Decide(st *state.ExecutionState) []rt.Command {
 	if st.IsTerminal() {
 		return nil

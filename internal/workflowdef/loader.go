@@ -11,7 +11,7 @@ import (
 )
 
 // LoadJSON reads a workflow definition from disk and normalizes it into the
-// canonical runtime model.
+// canonical runtime model. JSON is only an ingress format.
 func LoadJSON(path string) (rt.WorkflowDefinition, error) {
 	content, err := os.ReadFile(filepath.Clean(path))
 	if err != nil {
@@ -26,7 +26,8 @@ func LoadJSON(path string) (rt.WorkflowDefinition, error) {
 	return Normalize(def)
 }
 
-// BuiltIn returns a normalized built-in workflow example.
+// BuiltIn returns a normalized built-in workflow example through the same
+// validation path used for file-based definitions.
 func BuiltIn(name string) (rt.WorkflowDefinition, error) {
 	switch name {
 	case "linear-noop":
@@ -44,7 +45,8 @@ func BuiltIn(name string) (rt.WorkflowDefinition, error) {
 }
 
 // Normalize validates the external workflow contract and returns the canonical
-// in-memory definition that the runtime consumes.
+// in-memory definition that the runtime consumes independent of authoring
+// format.
 func Normalize(def rt.WorkflowDefinition) (rt.WorkflowDefinition, error) {
 	if def.Name == "" {
 		return rt.WorkflowDefinition{}, errors.New("workflow name is required")

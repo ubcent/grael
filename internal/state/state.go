@@ -26,6 +26,7 @@ type Node struct {
 	Output       map[string]any
 }
 
+// New returns the empty derived state used both for new runs and full replay.
 func New() *ExecutionState {
 	return &ExecutionState{
 		RunState: rt.RunStateRunning,
@@ -33,6 +34,7 @@ func New() *ExecutionState {
 	}
 }
 
+// Rehydrate rebuilds state exclusively from the persisted event history.
 func Rehydrate(events []rt.Event) (*ExecutionState, error) {
 	st := New()
 	for _, event := range events {
@@ -43,6 +45,7 @@ func Rehydrate(events []rt.Event) (*ExecutionState, error) {
 	return st, nil
 }
 
+// Apply is the only legal way to mutate derived execution state.
 func (s *ExecutionState) Apply(event rt.Event) error {
 	switch event.Type {
 	case rt.EventWorkflowStarted:
@@ -123,6 +126,7 @@ func (s *ExecutionState) IsTerminal() bool {
 	return s.RunState == rt.RunStateCompleted
 }
 
+// View materializes the external read model from the current derived state.
 func (s *ExecutionState) View() rt.RunView {
 	nodes := make(map[string]rt.NodeView, len(s.Nodes))
 	for id, node := range s.Nodes {

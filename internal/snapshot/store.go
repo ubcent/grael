@@ -20,6 +20,7 @@ type Store struct {
 	mu      sync.Mutex
 }
 
+// Info is a lightweight inspection view for manual verification and tooling.
 type Info struct {
 	RunID     string    `json:"run_id"`
 	Seq       uint64    `json:"seq"`
@@ -39,6 +40,8 @@ func NewStore(baseDir string) *Store {
 	return &Store{baseDir: baseDir}
 }
 
+// Save persists a point-in-time copy of already-derived state. Snapshots are a
+// replay optimization and never replace the WAL as the durable source of truth.
 func (s *Store) Save(st *state.ExecutionState) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -71,6 +74,7 @@ func (s *Store) Save(st *state.ExecutionState) error {
 	return nil
 }
 
+// Load returns a previously persisted state snapshot when one exists.
 func (s *Store) Load(runID string) (*state.ExecutionState, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -101,6 +105,7 @@ func (s *Store) Load(runID string) (*state.ExecutionState, bool, error) {
 	return &st, true, nil
 }
 
+// Info reads snapshot metadata without rebuilding the full state payload.
 func (s *Store) Info(runID string) (Info, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

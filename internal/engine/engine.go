@@ -26,9 +26,12 @@ type Engine struct {
 }
 
 type runEntry struct {
+	// state is always derived from persisted events and optional snapshot state;
+	// it must never become an independent source of truth.
 	state *state.ExecutionState
-	done  chan struct{}
-	once  sync.Once
+	// done is closed when the current in-process drive pass reaches quiescence.
+	done chan struct{}
+	once sync.Once
 }
 
 func New(baseDir string) *Engine {
@@ -142,6 +145,8 @@ func (e *Engine) WaitForQuiescence(runID string, timeout time.Duration) (bool, e
 	}
 }
 
+// SnapshotInfo exposes whether a durable snapshot exists for a run and what
+// sequence boundary it covers. This is primarily a manual inspection surface.
 func (e *Engine) SnapshotInfo(runID string) (snapshot.Info, error) {
 	return e.snapshots.Info(runID)
 }
@@ -159,6 +164,8 @@ func (e *Engine) drive(runID string, entry *runEntry) {
 		st := entry.state
 		commands := e.scheduler.Decide(st)
 		if len(commands) == 0 {
+			// Quiescent boundaries are safe points to persist a snapshot of the
+			// already-derived state. WAL remains the primary durable record.
 			_ = e.snapshots.Save(st)
 			e.mu.Unlock()
 			return
@@ -193,6 +200,8 @@ func (e *Engine) rehydrate(runID string, events []rt.Event) (*state.ExecutionSta
 		return nil, err
 	}
 	if ok && err == nil {
+		// Snapshots only shorten replay time; correctness still comes from
+		// replaying the WAL tail beyond the snapshot sequence.
 		for _, event := range events {
 			if event.Seq <= snapState.LastSeq {
 				continue
@@ -203,5 +212,6 @@ func (e *Engine) rehydrate(runID string, events []rt.Event) (*state.ExecutionSta
 		}
 		return snapState, nil
 	}
+	// Missing or corrupt snapshots fall back to full WAL replay.
 	return state.Rehydrate(events)
 }
