@@ -17,17 +17,31 @@ type ExecutionState struct {
 	FinishedAt *time.Time
 	LastSeq    uint64
 	Nodes      map[string]*Node
+	Timers     map[string]*Timer
 }
 
 type Node struct {
-	ID           string
-	ActivityType rt.ActivityType
-	DependsOn    []string
-	State        rt.NodeState
-	Attempt      uint32
-	WorkerID     string
-	LastError    string
-	Output       map[string]any
+	ID                string
+	ActivityType      rt.ActivityType
+	DependsOn         []string
+	RetryPolicy       *rt.RetryPolicy
+	ExecutionDeadline time.Duration
+	AbsoluteDeadline  time.Duration
+	State             rt.NodeState
+	Attempt           uint32
+	WorkerID          string
+	LastHeartbeatAt   time.Time
+	LastError         string
+	Output            map[string]any
+}
+
+type Timer struct {
+	ID      string
+	NodeID  string
+	Attempt uint32
+	Purpose rt.TimerPurpose
+	FireAt  time.Time
+	Fired   bool
 }
 
 // New returns the empty derived state used both for new runs and full replay.
@@ -35,6 +49,7 @@ func New() *ExecutionState {
 	return &ExecutionState{
 		RunState: rt.RunStateRunning,
 		Nodes:    map[string]*Node{},
+		Timers:   map[string]*Timer{},
 	}
 }
 
@@ -61,10 +76,13 @@ func (s *ExecutionState) Apply(event rt.Event) error {
 		s.CreatedAt = event.Timestamp
 		for _, def := range payload.Workflow.Nodes {
 			s.Nodes[def.ID] = &Node{
-				ID:           def.ID,
-				ActivityType: def.ActivityType,
-				DependsOn:    slices.Clone(def.DependsOn),
-				State:        rt.NodeStatePending,
+				ID:                def.ID,
+				ActivityType:      def.ActivityType,
+				DependsOn:         slices.Clone(def.DependsOn),
+				RetryPolicy:       def.RetryPolicy,
+				ExecutionDeadline: def.ExecutionDeadline,
+				AbsoluteDeadline:  def.AbsoluteDeadline,
+				State:             rt.NodeStatePending,
 			}
 		}
 		// Readiness is derived, not stored independently. Recomputing it here keeps
@@ -78,7 +96,57 @@ func (s *ExecutionState) Apply(event rt.Event) error {
 		}
 		node.Attempt = payload.Attempt
 		node.WorkerID = payload.WorkerID
+		node.LastHeartbeatAt = event.Timestamp
 		node.LastError = ""
+	case rt.EventHeartbeatRecorded:
+		payload := event.Payload.(rt.HeartbeatRecordedPayload)
+		node, ok := s.Nodes[payload.NodeID]
+		if !ok {
+			return fmt.Errorf("heartbeat recorded for unknown node %q", payload.NodeID)
+		}
+		if node.Attempt == payload.Attempt && node.WorkerID == payload.WorkerID {
+			node.LastHeartbeatAt = event.Timestamp
+		}
+	case rt.EventLeaseExpired:
+		payload := event.Payload.(rt.LeaseExpiredPayload)
+		node, ok := s.Nodes[payload.NodeID]
+		if !ok {
+			return fmt.Errorf("lease expired for unknown node %q", payload.NodeID)
+		}
+		if node.Attempt != payload.Attempt {
+			return fmt.Errorf("lease expired for stale attempt %d on node %q", payload.Attempt, payload.NodeID)
+		}
+		node.State = rt.NodeStateReady
+		node.WorkerID = ""
+		node.LastHeartbeatAt = time.Time{}
+		node.LastError = "lease expired"
+	case rt.EventTimerScheduled:
+		payload := event.Payload.(rt.TimerScheduledPayload)
+		s.Timers[payload.TimerID] = &Timer{
+			ID:      payload.TimerID,
+			NodeID:  payload.NodeID,
+			Attempt: payload.Attempt,
+			Purpose: payload.Purpose,
+			FireAt:  payload.FireAt,
+		}
+	case rt.EventTimerFired:
+		payload := event.Payload.(rt.TimerFiredPayload)
+		timer, ok := s.Timers[payload.TimerID]
+		if !ok {
+			return fmt.Errorf("timer fired for unknown timer %q", payload.TimerID)
+		}
+		timer.Fired = true
+		if payload.Purpose == rt.TimerPurposeRetryBackoff {
+			node, ok := s.Nodes[payload.NodeID]
+			if !ok {
+				return fmt.Errorf("retry timer fired for unknown node %q", payload.NodeID)
+			}
+			if node.Attempt == payload.Attempt && node.State == rt.NodeStateFailed {
+				node.State = rt.NodeStateReady
+				node.WorkerID = ""
+				node.LastHeartbeatAt = time.Time{}
+			}
+		}
 	case rt.EventNodeReady:
 		payload := event.Payload.(rt.NodeReadyPayload)
 		node, ok := s.Nodes[payload.NodeID]
@@ -96,6 +164,7 @@ func (s *ExecutionState) Apply(event rt.Event) error {
 		}
 		node.Attempt = payload.Attempt
 		node.WorkerID = payload.WorkerID
+		node.LastHeartbeatAt = event.Timestamp
 		node.State = rt.NodeStateRunning
 	case rt.EventNodeCompleted:
 		payload := event.Payload.(rt.NodeCompletedPayload)
@@ -106,6 +175,7 @@ func (s *ExecutionState) Apply(event rt.Event) error {
 		node.State = rt.NodeStateCompleted
 		node.WorkerID = payload.WorkerID
 		node.Attempt = payload.Attempt
+		node.LastHeartbeatAt = time.Time{}
 		node.LastError = ""
 		node.Output = payload.Output
 		s.markReadyNodes()
@@ -118,7 +188,12 @@ func (s *ExecutionState) Apply(event rt.Event) error {
 		node.State = rt.NodeStateFailed
 		node.WorkerID = payload.WorkerID
 		node.Attempt = payload.Attempt
+		node.LastHeartbeatAt = time.Time{}
 		node.LastError = payload.Message
+	case rt.EventWorkflowFailed:
+		s.RunState = rt.RunStateFailed
+		finishedAt := event.Timestamp
+		s.FinishedAt = &finishedAt
 	case rt.EventWorkflowCompleted:
 		s.RunState = rt.RunStateCompleted
 		finishedAt := event.Timestamp
@@ -152,7 +227,7 @@ func (s *ExecutionState) dependenciesCompleted(depIDs []string) bool {
 }
 
 func (s *ExecutionState) IsTerminal() bool {
-	return s.RunState == rt.RunStateCompleted
+	return s.RunState == rt.RunStateCompleted || s.RunState == rt.RunStateFailed
 }
 
 // View materializes the external read model from the current derived state.

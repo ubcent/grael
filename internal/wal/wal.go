@@ -95,6 +95,32 @@ func (s *Store) List(runID string) ([]rt.Event, error) {
 	return events, err
 }
 
+func (s *Store) RunIDs() ([]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	entries, err := os.ReadDir(s.baseDir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read wal dir: %w", err)
+	}
+
+	runIDs := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if filepath.Ext(name) != ".wal" {
+			continue
+		}
+		runIDs = append(runIDs, name[:len(name)-len(".wal")])
+	}
+	return runIDs, nil
+}
+
 func (s *Store) runPath(runID string) string {
 	return filepath.Join(s.baseDir, runID+".wal")
 }
@@ -175,6 +201,30 @@ func decodePayload(eventType rt.EventType, raw json.RawMessage) (interface{}, er
 			return nil, err
 		}
 		return payload, nil
+	case rt.EventHeartbeatRecorded:
+		var payload rt.HeartbeatRecordedPayload
+		if err := json.Unmarshal(raw, &payload); err != nil {
+			return nil, err
+		}
+		return payload, nil
+	case rt.EventLeaseExpired:
+		var payload rt.LeaseExpiredPayload
+		if err := json.Unmarshal(raw, &payload); err != nil {
+			return nil, err
+		}
+		return payload, nil
+	case rt.EventTimerScheduled:
+		var payload rt.TimerScheduledPayload
+		if err := json.Unmarshal(raw, &payload); err != nil {
+			return nil, err
+		}
+		return payload, nil
+	case rt.EventTimerFired:
+		var payload rt.TimerFiredPayload
+		if err := json.Unmarshal(raw, &payload); err != nil {
+			return nil, err
+		}
+		return payload, nil
 	case rt.EventNodeReady:
 		var payload rt.NodeReadyPayload
 		if err := json.Unmarshal(raw, &payload); err != nil {
@@ -195,6 +245,15 @@ func decodePayload(eventType rt.EventType, raw json.RawMessage) (interface{}, er
 		return payload, nil
 	case rt.EventNodeFailed:
 		var payload rt.NodeFailedPayload
+		if err := json.Unmarshal(raw, &payload); err != nil {
+			return nil, err
+		}
+		return payload, nil
+	case rt.EventWorkflowFailed:
+		var payload rt.WorkflowFailedPayload
+		if len(raw) == 0 || string(raw) == "null" {
+			return payload, nil
+		}
 		if err := json.Unmarshal(raw, &payload); err != nil {
 			return nil, err
 		}

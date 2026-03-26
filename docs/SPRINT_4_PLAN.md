@@ -36,6 +36,11 @@ The sprint includes the following tasks from `docs/V1_TASK_BACKLOG.md`:
 9. `T27` Checkpoint timeout handling
 10. `T28` Checkpoint recovery across restart
 
+Implementation note:
+
+- runtime-layer absolute-deadline timer scheduling and timeout semantics already exist from post-Sprint-2 execution-core work
+- Sprint 4 still owns the full operator-visible acceptance outcome because `UAT-C5-04` depends on checkpoint waiting semantics that do not exist before `T25` to `T28`
+
 ---
 
 ## Why This Slice

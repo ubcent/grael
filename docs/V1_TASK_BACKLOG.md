@@ -138,7 +138,7 @@ Status model for future tracking:
 
 ### T8. Worker registry by activity type
 
-- `Status`: `todo`
+- `Status`: `done`
 - `Capability`: `C4`
 - `Goal`: Track available workers by activity type and route dispatch to compatible handlers.
 - `Scope`:
@@ -152,7 +152,7 @@ Status model for future tracking:
 
 ### T9. Public worker RPC surface: PollTask, CompleteTask, FailTask, Heartbeat
 
-- `Status`: `todo`
+- `Status`: `done`
 - `Capability`: `C4`
 - `Goal`: Expose the minimal worker protocol required by v1.
 - `Scope`:
@@ -167,7 +167,7 @@ Status model for future tracking:
 
 ### T10. Lease grant on dispatch and active-attempt tracking
 
-- `Status`: `todo`
+- `Status`: `done`
 - `Capability`: `C4`
 - `Goal`: Make task ownership explicit and persistently tracked per attempt.
 - `Scope`:
@@ -181,7 +181,7 @@ Status model for future tracking:
 
 ### T11. Heartbeat timeout and lease expiry monitor
 
-- `Status`: `todo`
+- `Status`: `done`
 - `Capability`: `C4`
 - `Goal`: Detect lost worker liveness and expire held leases.
 - `Scope`:
@@ -194,7 +194,7 @@ Status model for future tracking:
 
 ### T12. Reject stale worker results after lease expiry
 
-- `Status`: `todo`
+- `Status`: `done`
 - `Capability`: `C4`
 - `Goal`: Ensure expired attempts can no longer complete successfully.
 - `Scope`:
@@ -208,7 +208,7 @@ Status model for future tracking:
 
 ### T13. Timer scheduling and firing engine
 
-- `Status`: `todo`
+- `Status`: `done`
 - `Capability`: `C5`
 - `Goal`: Persist timers and fire them from a recoverable timer manager.
 - `Scope`:
@@ -223,7 +223,7 @@ Status model for future tracking:
 
 ### T14. Retry policy and retry backoff scheduling
 
-- `Status`: `todo`
+- `Status`: `done`
 - `Capability`: `C5`
 - `Goal`: Turn retryable failures into scheduled re-execution attempts.
 - `Scope`:
@@ -237,7 +237,7 @@ Status model for future tracking:
 
 ### T15. Execution deadline enforcement
 
-- `Status`: `todo`
+- `Status`: `done`
 - `Capability`: `C5`
 - `Goal`: Prevent stuck running nodes from blocking the workflow forever.
 - `Scope`:
@@ -250,7 +250,7 @@ Status model for future tracking:
 
 ### T16. Absolute deadline enforcement
 
-- `Status`: `todo`
+- `Status`: `in_progress`
 - `Capability`: `C5`
 - `Goal`: Enforce a hard node deadline that continues across approval waiting.
 - `Scope`:
@@ -259,6 +259,11 @@ Status model for future tracking:
 - `Depends on`: `T13`, `T15`
 - `Definition of Done`:
   - [UAT-C5-04](docs/uat/UAT-C5-04-absolute-deadline-during-approval.md)
+
+Implementation note:
+
+- runtime-level absolute-deadline timer scheduling and timeout failure semantics are in place
+- full definition of done remains open until checkpoint/`AWAITING_APPROVAL` behavior exists and [UAT-C5-04](docs/uat/UAT-C5-04-absolute-deadline-during-approval.md) can pass end to end
 
 ---
 

@@ -68,3 +68,14 @@ func (r *Registry) CanHandle(workerID string, activity rt.ActivityType) bool {
 	}
 	return slices.Contains(reg.Activities, activity)
 }
+
+func (r *Registry) LastSeen(workerID string) (time.Time, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	reg, ok := r.workers[workerID]
+	if !ok {
+		return time.Time{}, false
+	}
+	return reg.LastSeenAt, true
+}

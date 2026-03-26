@@ -112,6 +112,13 @@ Sprint 2 is complete when all of the following are true:
   - [UAT-C5-02-overdue-retry-after-restart.md](docs/uat/UAT-C5-02-overdue-retry-after-restart.md)
   - [UAT-C5-03-execution-deadline-timeout.md](docs/uat/UAT-C5-03-execution-deadline-timeout.md)
 
+Current status:
+
+- `T8` through `T15` are implemented to the current baseline
+- worker execution now flows through the public worker contract rather than hidden internal completion shortcuts
+- lease expiry, stale-result rejection, retry timers, restart catch-up, and execution-deadline timeout coverage are exercised in integration tests
+- absolute-deadline runtime groundwork also exists, but the checkpoint-dependent acceptance scenario remains part of Sprint 4
+
 ---
 
 ## Stretch Goal

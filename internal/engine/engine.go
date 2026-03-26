@@ -19,6 +19,13 @@ var (
 	ErrWorkerUnavailable = errors.New("engine: worker is not registered for this activity type")
 	ErrTaskNotFound      = errors.New("engine: task not found")
 	ErrAttemptMismatch   = errors.New("engine: attempt does not match active lease")
+	ErrLeaseExpired      = errors.New("engine: lease expired")
+)
+
+const (
+	defaultHeartbeatTimeout = 150 * time.Millisecond
+	leaseMonitorInterval    = 25 * time.Millisecond
+	timerMonitorInterval    = 25 * time.Millisecond
 )
 
 type Engine struct {
@@ -30,12 +37,16 @@ type Engine struct {
 }
 
 func New(baseDir string) *Engine {
-	return &Engine{
+	e := &Engine{
 		wal:       wal.NewStore(baseDir),
 		snapshots: snapshot.NewStore(baseDir),
 		workers:   worker.NewRegistry(),
 		runs:      map[string]*state.ExecutionState{},
 	}
+	e.loadPersistedRuns()
+	go e.runLeaseMonitor()
+	go e.runTimerMonitor()
+	return e
 }
 
 func (e *Engine) StartRun(def rt.WorkflowDefinition, input map[string]any) (string, error) {
@@ -74,6 +85,9 @@ func (e *Engine) PollTask(workerID string, timeout time.Duration) (rt.WorkerTask
 	if timeout < 0 {
 		timeout = 0
 	}
+	if err := e.Heartbeat(workerID); err != nil {
+		return rt.WorkerTask{}, false, err
+	}
 
 	deadline := time.Now().Add(timeout)
 	for {
@@ -101,6 +115,9 @@ func (e *Engine) CompleteTask(req rt.CompleteTaskRequest) error {
 	if node == nil {
 		return ErrTaskNotFound
 	}
+	if node.Attempt == req.Attempt && node.State != rt.NodeStateRunning {
+		return ErrLeaseExpired
+	}
 	if node.State != rt.NodeStateRunning || node.WorkerID != req.WorkerID || node.Attempt != req.Attempt {
 		return ErrAttemptMismatch
 	}
@@ -125,6 +142,9 @@ func (e *Engine) CompleteTask(req rt.CompleteTaskRequest) error {
 	if err := e.completeWorkflowIfTerminalLocked(st); err != nil {
 		return err
 	}
+	if err := e.failWorkflowIfTerminalLocked(st); err != nil {
+		return err
+	}
 	return e.snapshots.Save(st)
 }
 
@@ -141,6 +161,9 @@ func (e *Engine) FailTask(req rt.FailTaskRequest) error {
 	if node == nil {
 		return ErrTaskNotFound
 	}
+	if node.Attempt == req.Attempt && node.State != rt.NodeStateRunning {
+		return ErrLeaseExpired
+	}
 	if node.State != rt.NodeStateRunning || node.WorkerID != req.WorkerID || node.Attempt != req.Attempt {
 		return ErrAttemptMismatch
 	}
@@ -150,10 +173,11 @@ func (e *Engine) FailTask(req rt.FailTaskRequest) error {
 		Type:      rt.EventNodeFailed,
 		Timestamp: time.Now().UTC(),
 		Payload: rt.NodeFailedPayload{
-			NodeID:   req.NodeID,
-			WorkerID: req.WorkerID,
-			Attempt:  req.Attempt,
-			Message:  req.Message,
+			NodeID:    req.NodeID,
+			WorkerID:  req.WorkerID,
+			Attempt:   req.Attempt,
+			Message:   req.Message,
+			Retryable: req.Retryable,
 		},
 	})
 	if err != nil {
@@ -162,11 +186,63 @@ func (e *Engine) FailTask(req rt.FailTaskRequest) error {
 	if err := st.Apply(event); err != nil {
 		return err
 	}
+	retryScheduled := false
+	if req.Retryable {
+		if err := e.scheduleRetryTimerLocked(st, node, req); err != nil {
+			return err
+		}
+		retryScheduled = hasPendingRetryTimer(st, node.ID, req.Attempt)
+	}
+	if !retryScheduled {
+		if err := e.failWorkflowIfTerminalLocked(st); err != nil {
+			return err
+		}
+	}
 	return e.snapshots.Save(st)
 }
 
 func (e *Engine) Heartbeat(workerID string) error {
-	return e.workers.Heartbeat(workerID)
+	if err := e.workers.Heartbeat(workerID); err != nil {
+		return err
+	}
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	now := time.Now().UTC()
+	for runID := range e.runs {
+		st, err := e.loadStateLocked(runID)
+		if err != nil || st.IsTerminal() {
+			continue
+		}
+		changed := false
+		for _, node := range st.Nodes {
+			if node.State != rt.NodeStateRunning || node.WorkerID != workerID {
+				continue
+			}
+			event, err := e.wal.Append(rt.Event{
+				RunID:     st.RunID,
+				Type:      rt.EventHeartbeatRecorded,
+				Timestamp: now,
+				Payload: rt.HeartbeatRecordedPayload{
+					NodeID:   node.ID,
+					WorkerID: workerID,
+					Attempt:  node.Attempt,
+				},
+			})
+			if err != nil {
+				continue
+			}
+			if err := st.Apply(event); err != nil {
+				continue
+			}
+			changed = true
+		}
+		if changed {
+			_ = e.snapshots.Save(st)
+		}
+	}
+	return nil
 }
 
 func (e *Engine) GetRun(runID string) (rt.RunView, error) {
@@ -258,6 +334,10 @@ func (e *Engine) tryClaimTask(workerID string) (rt.WorkerTask, bool, error) {
 }
 
 func (e *Engine) claimReadyTaskLocked(st *state.ExecutionState, workerID string) (rt.WorkerTask, bool, error) {
+	if st.IsTerminal() {
+		return rt.WorkerTask{}, false, nil
+	}
+
 	nodeIDs := make([]string, 0, len(st.Nodes))
 	for nodeID := range st.Nodes {
 		nodeIDs = append(nodeIDs, nodeID)
@@ -307,6 +387,12 @@ func (e *Engine) claimReadyTaskLocked(st *state.ExecutionState, workerID string)
 				return rt.WorkerTask{}, false, err
 			}
 		}
+		if err := e.scheduleExecutionDeadlineTimerLocked(st, node, workerID, attempt); err != nil {
+			return rt.WorkerTask{}, false, err
+		}
+		if err := e.scheduleAbsoluteDeadlineTimerLocked(st, node, workerID, attempt); err != nil {
+			return rt.WorkerTask{}, false, err
+		}
 		if err := e.snapshots.Save(st); err != nil {
 			return rt.WorkerTask{}, false, err
 		}
@@ -341,6 +427,25 @@ func (e *Engine) completeWorkflowIfTerminalLocked(st *state.ExecutionState) erro
 	return st.Apply(event)
 }
 
+func (e *Engine) failWorkflowIfTerminalLocked(st *state.ExecutionState) error {
+	if st.IsTerminal() || !anyNodeFailed(st) {
+		return nil
+	}
+
+	event, err := e.wal.Append(rt.Event{
+		RunID:     st.RunID,
+		Type:      rt.EventWorkflowFailed,
+		Timestamp: time.Now().UTC(),
+		Payload: rt.WorkflowFailedPayload{
+			Reason: "node failed",
+		},
+	})
+	if err != nil {
+		return err
+	}
+	return st.Apply(event)
+}
+
 func allNodesCompleted(st *state.ExecutionState) bool {
 	if len(st.Nodes) == 0 {
 		return false
@@ -356,6 +461,15 @@ func allNodesCompleted(st *state.ExecutionState) bool {
 func hasReadyNode(view rt.RunView) bool {
 	for _, node := range view.Nodes {
 		if node.State == rt.NodeStateReady {
+			return true
+		}
+	}
+	return false
+}
+
+func anyNodeFailed(st *state.ExecutionState) bool {
+	for _, node := range st.Nodes {
+		if node.State == rt.NodeStateFailed {
 			return true
 		}
 	}
@@ -400,4 +514,250 @@ func (e *Engine) rehydrate(runID string, events []rt.Event) (*state.ExecutionSta
 		return snapState, nil
 	}
 	return state.Rehydrate(events)
+}
+
+func (e *Engine) runLeaseMonitor() {
+	ticker := time.NewTicker(leaseMonitorInterval)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		e.expireOverdueLeases()
+	}
+}
+
+func (e *Engine) runTimerMonitor() {
+	ticker := time.NewTicker(timerMonitorInterval)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		e.fireDueTimers()
+	}
+}
+
+func (e *Engine) expireOverdueLeases() {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	now := time.Now().UTC()
+	for runID := range e.runs {
+		st, err := e.loadStateLocked(runID)
+		if err != nil {
+			continue
+		}
+		changed := false
+		for _, node := range st.Nodes {
+			if node.State != rt.NodeStateRunning || node.WorkerID == "" {
+				continue
+			}
+			if !node.LastHeartbeatAt.IsZero() && now.Sub(node.LastHeartbeatAt) <= defaultHeartbeatTimeout {
+				continue
+			}
+
+			event, err := e.wal.Append(rt.Event{
+				RunID:     st.RunID,
+				Type:      rt.EventLeaseExpired,
+				Timestamp: now,
+				Payload: rt.LeaseExpiredPayload{
+					NodeID:   node.ID,
+					WorkerID: node.WorkerID,
+					Attempt:  node.Attempt,
+				},
+			})
+			if err != nil {
+				continue
+			}
+			if err := st.Apply(event); err != nil {
+				continue
+			}
+			changed = true
+		}
+		if changed {
+			_ = e.snapshots.Save(st)
+		}
+	}
+}
+
+func (e *Engine) fireDueTimers() {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	now := time.Now().UTC()
+	for runID := range e.runs {
+		st, err := e.loadStateLocked(runID)
+		if err != nil {
+			continue
+		}
+		changed := false
+		for _, timer := range st.Timers {
+			if st.IsTerminal() || timer.Fired || timer.FireAt.After(now) {
+				continue
+			}
+			event, err := e.wal.Append(rt.Event{
+				RunID:     st.RunID,
+				Type:      rt.EventTimerFired,
+				Timestamp: now,
+				Payload: rt.TimerFiredPayload{
+					TimerID: timer.ID,
+					NodeID:  timer.NodeID,
+					Attempt: timer.Attempt,
+					Purpose: timer.Purpose,
+				},
+			})
+			if err != nil {
+				continue
+			}
+			if err := st.Apply(event); err != nil {
+				continue
+			}
+			if timer.Purpose == rt.TimerPurposeNodeExecDeadline || timer.Purpose == rt.TimerPurposeNodeAbsDeadline {
+				node := st.Nodes[timer.NodeID]
+				if node != nil && !isTerminalNode(node.State) && node.Attempt == timer.Attempt {
+					failEvent, err := e.wal.Append(rt.Event{
+						RunID:     st.RunID,
+						Type:      rt.EventNodeFailed,
+						Timestamp: now,
+						Payload: rt.NodeFailedPayload{
+							NodeID:    node.ID,
+							WorkerID:  node.WorkerID,
+							Attempt:   node.Attempt,
+							Message:   timeoutMessageFor(timer.Purpose),
+							TimedOut:  true,
+							Retryable: false,
+						},
+					})
+					if err == nil {
+						if err := st.Apply(failEvent); err == nil {
+							_ = e.failWorkflowIfTerminalLocked(st)
+							changed = true
+						}
+					}
+				}
+			}
+			changed = true
+		}
+		if changed {
+			_ = e.snapshots.Save(st)
+		}
+	}
+}
+
+func (e *Engine) scheduleExecutionDeadlineTimerLocked(st *state.ExecutionState, node *state.Node, workerID string, attempt uint32) error {
+	if node.ExecutionDeadline <= 0 {
+		return nil
+	}
+
+	now := time.Now().UTC()
+	timerID := fmt.Sprintf("%s:%s:%d:%s", st.RunID, node.ID, attempt, rt.TimerPurposeNodeExecDeadline)
+	event, err := e.wal.Append(rt.Event{
+		RunID:     st.RunID,
+		Type:      rt.EventTimerScheduled,
+		Timestamp: now,
+		Payload: rt.TimerScheduledPayload{
+			TimerID:  timerID,
+			NodeID:   node.ID,
+			Attempt:  attempt,
+			Purpose:  rt.TimerPurposeNodeExecDeadline,
+			FireAt:   now.Add(node.ExecutionDeadline),
+			WorkerID: workerID,
+		},
+	})
+	if err != nil {
+		return err
+	}
+	return st.Apply(event)
+}
+
+func (e *Engine) scheduleAbsoluteDeadlineTimerLocked(st *state.ExecutionState, node *state.Node, workerID string, attempt uint32) error {
+	if node.AbsoluteDeadline <= 0 {
+		return nil
+	}
+
+	now := time.Now().UTC()
+	timerID := fmt.Sprintf("%s:%s:%d:%s", st.RunID, node.ID, attempt, rt.TimerPurposeNodeAbsDeadline)
+	event, err := e.wal.Append(rt.Event{
+		RunID:     st.RunID,
+		Type:      rt.EventTimerScheduled,
+		Timestamp: now,
+		Payload: rt.TimerScheduledPayload{
+			TimerID:  timerID,
+			NodeID:   node.ID,
+			Attempt:  attempt,
+			Purpose:  rt.TimerPurposeNodeAbsDeadline,
+			FireAt:   now.Add(node.AbsoluteDeadline),
+			WorkerID: workerID,
+		},
+	})
+	if err != nil {
+		return err
+	}
+	return st.Apply(event)
+}
+
+func (e *Engine) scheduleRetryTimerLocked(st *state.ExecutionState, node *state.Node, req rt.FailTaskRequest) error {
+	if node.RetryPolicy == nil || node.RetryPolicy.MaxAttempts <= 1 {
+		return nil
+	}
+	if int(req.Attempt) >= node.RetryPolicy.MaxAttempts {
+		return nil
+	}
+
+	fireAt := time.Now().UTC().Add(node.RetryPolicy.Backoff)
+	timerID := fmt.Sprintf("%s:%s:%d:%s", st.RunID, node.ID, req.Attempt, rt.TimerPurposeRetryBackoff)
+	event, err := e.wal.Append(rt.Event{
+		RunID:     st.RunID,
+		Type:      rt.EventTimerScheduled,
+		Timestamp: time.Now().UTC(),
+		Payload: rt.TimerScheduledPayload{
+			TimerID:  timerID,
+			NodeID:   node.ID,
+			Attempt:  req.Attempt,
+			Purpose:  rt.TimerPurposeRetryBackoff,
+			FireAt:   fireAt,
+			WorkerID: req.WorkerID,
+		},
+	})
+	if err != nil {
+		return err
+	}
+	return st.Apply(event)
+}
+
+func (e *Engine) loadPersistedRuns() {
+	runIDs, err := e.wal.RunIDs()
+	if err != nil {
+		return
+	}
+	for _, runID := range runIDs {
+		events, err := e.wal.List(runID)
+		if err != nil || len(events) == 0 {
+			continue
+		}
+		st, err := e.rehydrate(runID, events)
+		if err != nil {
+			continue
+		}
+		e.runs[runID] = st
+	}
+}
+
+func hasPendingRetryTimer(st *state.ExecutionState, nodeID string, attempt uint32) bool {
+	for _, timer := range st.Timers {
+		if timer.NodeID == nodeID && timer.Attempt == attempt && timer.Purpose == rt.TimerPurposeRetryBackoff && !timer.Fired {
+			return true
+		}
+	}
+	return false
+}
+
+func isTerminalNode(nodeState rt.NodeState) bool {
+	return nodeState == rt.NodeStateCompleted || nodeState == rt.NodeStateFailed
+}
+
+func timeoutMessageFor(purpose rt.TimerPurpose) string {
+	switch purpose {
+	case rt.TimerPurposeNodeAbsDeadline:
+		return "absolute deadline exceeded"
+	default:
+		return "execution deadline exceeded"
+	}
 }

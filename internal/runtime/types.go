@@ -7,10 +7,15 @@ type EventType string
 const (
 	EventWorkflowStarted   EventType = "WorkflowStarted"
 	EventLeaseGranted      EventType = "LeaseGranted"
+	EventHeartbeatRecorded EventType = "HeartbeatRecorded"
+	EventLeaseExpired      EventType = "LeaseExpired"
+	EventTimerScheduled    EventType = "TimerScheduled"
+	EventTimerFired        EventType = "TimerFired"
 	EventNodeReady         EventType = "NodeReady"
 	EventNodeStarted       EventType = "NodeStarted"
 	EventNodeCompleted     EventType = "NodeCompleted"
 	EventNodeFailed        EventType = "NodeFailed"
+	EventWorkflowFailed    EventType = "WorkflowFailed"
 	EventWorkflowCompleted EventType = "WorkflowCompleted"
 )
 
@@ -29,6 +34,7 @@ type RunState string
 const (
 	RunStateRunning   RunState = "RUNNING"
 	RunStateCompleted RunState = "COMPLETED"
+	RunStateFailed    RunState = "FAILED"
 )
 
 type ActivityType string
@@ -43,10 +49,18 @@ type WorkflowDefinition struct {
 	Nodes []NodeDefinition `json:"nodes"`
 }
 
+type RetryPolicy struct {
+	MaxAttempts int           `json:"max_attempts"`
+	Backoff     time.Duration `json:"backoff"`
+}
+
 type NodeDefinition struct {
-	ID           string       `json:"id"`
-	ActivityType ActivityType `json:"activity_type"`
-	DependsOn    []string     `json:"depends_on,omitempty"`
+	ID                string        `json:"id"`
+	ActivityType      ActivityType  `json:"activity_type"`
+	DependsOn         []string      `json:"depends_on,omitempty"`
+	RetryPolicy       *RetryPolicy  `json:"retry_policy,omitempty"`
+	ExecutionDeadline time.Duration `json:"execution_deadline,omitempty"`
+	AbsoluteDeadline  time.Duration `json:"absolute_deadline,omitempty"`
 }
 
 type Event struct {
@@ -69,6 +83,42 @@ type LeaseGrantedPayload struct {
 	Activity string `json:"activity_type"`
 }
 
+type HeartbeatRecordedPayload struct {
+	NodeID   string `json:"node_id"`
+	WorkerID string `json:"worker_id"`
+	Attempt  uint32 `json:"attempt"`
+}
+
+type LeaseExpiredPayload struct {
+	NodeID   string `json:"node_id"`
+	WorkerID string `json:"worker_id"`
+	Attempt  uint32 `json:"attempt"`
+}
+
+type TimerPurpose string
+
+const (
+	TimerPurposeRetryBackoff     TimerPurpose = "retry_backoff"
+	TimerPurposeNodeExecDeadline TimerPurpose = "node_exec_deadline"
+	TimerPurposeNodeAbsDeadline  TimerPurpose = "node_abs_deadline"
+)
+
+type TimerScheduledPayload struct {
+	TimerID  string       `json:"timer_id"`
+	NodeID   string       `json:"node_id"`
+	Attempt  uint32       `json:"attempt"`
+	Purpose  TimerPurpose `json:"purpose"`
+	FireAt   time.Time    `json:"fire_at"`
+	WorkerID string       `json:"worker_id,omitempty"`
+}
+
+type TimerFiredPayload struct {
+	TimerID string       `json:"timer_id"`
+	NodeID  string       `json:"node_id"`
+	Attempt uint32       `json:"attempt"`
+	Purpose TimerPurpose `json:"purpose"`
+}
+
 type NodeReadyPayload struct {
 	NodeID string `json:"node_id"`
 }
@@ -87,13 +137,19 @@ type NodeCompletedPayload struct {
 }
 
 type NodeFailedPayload struct {
-	NodeID   string `json:"node_id"`
-	WorkerID string `json:"worker_id"`
-	Attempt  uint32 `json:"attempt"`
-	Message  string `json:"message,omitempty"`
+	NodeID    string `json:"node_id"`
+	WorkerID  string `json:"worker_id"`
+	Attempt   uint32 `json:"attempt"`
+	Message   string `json:"message,omitempty"`
+	Retryable bool   `json:"retryable,omitempty"`
+	TimedOut  bool   `json:"timed_out,omitempty"`
 }
 
 type WorkflowCompletedPayload struct{}
+
+type WorkflowFailedPayload struct {
+	Reason string `json:"reason,omitempty"`
+}
 
 type RunView struct {
 	RunID      string              `json:"run_id"`
@@ -133,9 +189,10 @@ type CompleteTaskRequest struct {
 }
 
 type FailTaskRequest struct {
-	WorkerID string `json:"worker_id"`
-	RunID    string `json:"run_id"`
-	NodeID   string `json:"node_id"`
-	Attempt  uint32 `json:"attempt"`
-	Message  string `json:"message,omitempty"`
+	WorkerID  string `json:"worker_id"`
+	RunID     string `json:"run_id"`
+	NodeID    string `json:"node_id"`
+	Attempt   uint32 `json:"attempt"`
+	Message   string `json:"message,omitempty"`
+	Retryable bool   `json:"retryable,omitempty"`
 }

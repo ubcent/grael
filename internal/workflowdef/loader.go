@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	rt "grael/internal/runtime"
 )
@@ -73,9 +74,12 @@ func Normalize(def rt.WorkflowDefinition) (rt.WorkflowDefinition, error) {
 		}
 
 		normalized.Nodes = append(normalized.Nodes, rt.NodeDefinition{
-			ID:           node.ID,
-			ActivityType: node.ActivityType,
-			DependsOn:    append([]string(nil), node.DependsOn...),
+			ID:                node.ID,
+			ActivityType:      node.ActivityType,
+			DependsOn:         append([]string(nil), node.DependsOn...),
+			RetryPolicy:       normalizeRetryPolicy(node.RetryPolicy),
+			ExecutionDeadline: normalizeExecutionDeadline(node.ExecutionDeadline),
+			AbsoluteDeadline:  normalizeExecutionDeadline(node.AbsoluteDeadline),
 		})
 		seen[node.ID] = struct{}{}
 	}
@@ -92,4 +96,25 @@ func Normalize(def rt.WorkflowDefinition) (rt.WorkflowDefinition, error) {
 	}
 
 	return normalized, nil
+}
+
+func normalizeRetryPolicy(policy *rt.RetryPolicy) *rt.RetryPolicy {
+	if policy == nil {
+		return nil
+	}
+	copyPolicy := *policy
+	if copyPolicy.MaxAttempts < 0 {
+		copyPolicy.MaxAttempts = 0
+	}
+	if copyPolicy.Backoff < 0 {
+		copyPolicy.Backoff = 0
+	}
+	return &copyPolicy
+}
+
+func normalizeExecutionDeadline(deadline time.Duration) time.Duration {
+	if deadline < 0 {
+		return 0
+	}
+	return deadline
 }
