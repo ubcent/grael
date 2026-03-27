@@ -250,7 +250,7 @@ Status model for future tracking:
 
 ### T16. Absolute deadline enforcement
 
-- `Status`: `in_progress`
+- `Status`: `done`
 - `Capability`: `C5`
 - `Goal`: Enforce a hard node deadline that continues across approval waiting.
 - `Scope`:
@@ -263,7 +263,7 @@ Status model for future tracking:
 Implementation note:
 
 - runtime-level absolute-deadline timer scheduling and timeout failure semantics are in place
-- full definition of done remains open until checkpoint/`AWAITING_APPROVAL` behavior exists and [UAT-C5-04](docs/uat/UAT-C5-04-absolute-deadline-during-approval.md) can pass end to end
+- checkpoint/`AWAITING_APPROVAL` behavior now exists, and absolute deadline is enforced while a node waits for approval
 
 ---
 
@@ -315,7 +315,7 @@ Implementation note:
 
 ### T20. CancelRun API and cancellation request persistence
 
-- `Status`: `todo`
+- `Status`: `done`
 - `Capability`: `C7`
 - `Goal`: Let operators request graceful cancellation for an active run.
 - `Scope`:
@@ -328,7 +328,7 @@ Implementation note:
 
 ### T21. Graceful cancel propagation by node state
 
-- `Status`: `todo`
+- `Status`: `done`
 - `Capability`: `C7`
 - `Goal`: Apply cancellation coherently to running, ready, pending, and waiting nodes.
 - `Scope`:
@@ -341,7 +341,7 @@ Implementation note:
 
 ### T22. Compensation stack construction from completed nodes
 
-- `Status`: `todo`
+- `Status`: `done`
 - `Capability`: `C7`
 - `Goal`: Record which completed nodes are compensable and in what unwind order.
 - `Scope`:
@@ -354,7 +354,7 @@ Implementation note:
 
 ### T23. Sequential compensation execution
 
-- `Status`: `todo`
+- `Status`: `done`
 - `Capability`: `C7`
 - `Goal`: Execute compensation actions in reverse order after permanent failure.
 - `Scope`:
@@ -367,7 +367,7 @@ Implementation note:
 
 ### T24. Compensation recovery after restart
 
-- `Status`: `todo`
+- `Status`: `done`
 - `Capability`: `C7`
 - `Goal`: Resume unfinished compensation from persisted progress after process restart.
 - `Scope`:
@@ -380,7 +380,7 @@ Implementation note:
 
 ### T25. Checkpoint request and awaiting-approval state
 
-- `Status`: `todo`
+- `Status`: `done`
 - `Capability`: `C8`
 - `Goal`: Let a worker request approval and move only that node into waiting state.
 - `Scope`:
@@ -394,7 +394,7 @@ Implementation note:
 
 ### T26. ApproveCheckpoint API and resume flow
 
-- `Status`: `todo`
+- `Status`: `done`
 - `Capability`: `C8`
 - `Goal`: Resume a waiting node after explicit approval.
 - `Scope`:
@@ -407,7 +407,7 @@ Implementation note:
 
 ### T27. Checkpoint timeout handling
 
-- `Status`: `todo`
+- `Status`: `done`
 - `Capability`: `C8`
 - `Goal`: Bound checkpoint waiting time if no approval arrives.
 - `Scope`:
@@ -420,7 +420,7 @@ Implementation note:
 
 ### T28. Checkpoint recovery across restart
 
-- `Status`: `todo`
+- `Status`: `done`
 - `Capability`: `C8`
 - `Goal`: Preserve waiting approval state and allow post-restart approval.
 - `Scope`:

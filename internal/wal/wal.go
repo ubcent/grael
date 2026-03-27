@@ -213,6 +213,38 @@ func decodePayload(eventType rt.EventType, raw json.RawMessage) (interface{}, er
 			return nil, err
 		}
 		return payload, nil
+	case rt.EventCancellationRequested:
+		return rt.CancellationRequestedPayload{}, nil
+	case rt.EventCancellationCompleted:
+		return rt.CancellationCompletedPayload{}, nil
+	case rt.EventCompensationStarted:
+		return rt.CompensationStartedPayload{}, nil
+	case rt.EventCompensationTaskStarted:
+		var payload rt.CompensationTaskStartedPayload
+		if err := json.Unmarshal(raw, &payload); err != nil {
+			return nil, err
+		}
+		return payload, nil
+	case rt.EventCompensationTaskCompleted:
+		var payload rt.CompensationTaskCompletedPayload
+		if err := json.Unmarshal(raw, &payload); err != nil {
+			return nil, err
+		}
+		return payload, nil
+	case rt.EventCompensationTaskExpired:
+		var payload rt.CompensationTaskExpiredPayload
+		if err := json.Unmarshal(raw, &payload); err != nil {
+			return nil, err
+		}
+		return payload, nil
+	case rt.EventCompensationTaskFailed:
+		var payload rt.CompensationTaskFailedPayload
+		if err := json.Unmarshal(raw, &payload); err != nil {
+			return nil, err
+		}
+		return payload, nil
+	case rt.EventCompensationCompleted:
+		return rt.CompensationCompletedPayload{}, nil
 	case rt.EventTimerScheduled:
 		var payload rt.TimerScheduledPayload
 		if err := json.Unmarshal(raw, &payload); err != nil {
@@ -225,6 +257,18 @@ func decodePayload(eventType rt.EventType, raw json.RawMessage) (interface{}, er
 			return nil, err
 		}
 		return payload, nil
+	case rt.EventCheckpointReached:
+		var payload rt.CheckpointReachedPayload
+		if err := json.Unmarshal(raw, &payload); err != nil {
+			return nil, err
+		}
+		return payload, nil
+	case rt.EventCheckpointApproved:
+		var payload rt.CheckpointApprovedPayload
+		if err := json.Unmarshal(raw, &payload); err != nil {
+			return nil, err
+		}
+		return payload, nil
 	case rt.EventNodeReady:
 		var payload rt.NodeReadyPayload
 		if err := json.Unmarshal(raw, &payload); err != nil {
@@ -233,6 +277,12 @@ func decodePayload(eventType rt.EventType, raw json.RawMessage) (interface{}, er
 		return payload, nil
 	case rt.EventNodeStarted:
 		var payload rt.NodeStartedPayload
+		if err := json.Unmarshal(raw, &payload); err != nil {
+			return nil, err
+		}
+		return payload, nil
+	case rt.EventNodeCancelled:
+		var payload rt.NodeCancelledPayload
 		if err := json.Unmarshal(raw, &payload); err != nil {
 			return nil, err
 		}

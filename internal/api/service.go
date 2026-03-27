@@ -40,6 +40,14 @@ func (s *Service) Heartbeat(workerID string) error {
 	return s.engine.Heartbeat(workerID)
 }
 
+func (s *Service) ApproveCheckpoint(runID, nodeID string) error {
+	return s.engine.ApproveCheckpoint(runID, nodeID)
+}
+
+func (s *Service) CancelRun(runID string) error {
+	return s.engine.CancelRun(runID)
+}
+
 func (s *Service) GetRun(runID string) (rt.RunView, error) {
 	return s.engine.GetRun(runID)
 }

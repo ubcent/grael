@@ -759,6 +759,809 @@ func TestAbsoluteDeadlineFailsRunningNode(t *testing.T) {
 	})
 }
 
+func TestCheckpointPausesOnlyOneNodeWhileOtherWorkContinues(t *testing.T) {
+	t.Parallel()
+
+	svc := api.New(t.TempDir())
+	if err := svc.RegisterWorker("worker-1", []rt.ActivityType{"gate", "side"}); err != nil {
+		t.Fatalf("register worker: %v", err)
+	}
+
+	runID, err := svc.StartRun(rt.WorkflowDefinition{
+		Name: "checkpoint-pause",
+		Nodes: []rt.NodeDefinition{
+			{ID: "gate", ActivityType: "gate", CheckpointTimeout: time.Second},
+			{ID: "side", ActivityType: "side"},
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("start run: %v", err)
+	}
+
+	firstTask, ok, err := svc.PollTask("worker-1", 250*time.Millisecond)
+	if err != nil {
+		t.Fatalf("poll first task: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected first task")
+	}
+	if err := svc.CompleteTask(rt.CompleteTaskRequest{
+		WorkerID:   "worker-1",
+		RunID:      runID,
+		NodeID:     firstTask.NodeID,
+		Attempt:    firstTask.Attempt,
+		Checkpoint: &rt.CheckpointRequest{Reason: "need approval"},
+	}); err != nil {
+		t.Fatalf("request checkpoint: %v", err)
+	}
+
+	waitForNodeState(t, svc, runID, firstTask.NodeID, rt.NodeStateAwaitingApproval)
+
+	secondTask, ok, err := svc.PollTask("worker-1", 250*time.Millisecond)
+	if err != nil {
+		t.Fatalf("poll second task: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected unrelated task while checkpoint waits")
+	}
+	if secondTask.NodeID == firstTask.NodeID {
+		t.Fatalf("expected unrelated node to continue, got repeated checkpoint node %s", secondTask.NodeID)
+	}
+	if err := svc.CompleteTask(rt.CompleteTaskRequest{
+		WorkerID: "worker-1",
+		RunID:    runID,
+		NodeID:   secondTask.NodeID,
+		Attempt:  secondTask.Attempt,
+		Output:   map[string]any{"status": "ok"},
+	}); err != nil {
+		t.Fatalf("complete unrelated node: %v", err)
+	}
+
+	view, err := svc.GetRun(runID)
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	if view.Nodes[firstTask.NodeID].State != rt.NodeStateAwaitingApproval {
+		t.Fatalf("expected checkpoint node to remain awaiting approval, got %s", view.Nodes[firstTask.NodeID].State)
+	}
+	if view.Nodes[secondTask.NodeID].State != rt.NodeStateCompleted {
+		t.Fatalf("expected unrelated node to complete, got %s", view.Nodes[secondTask.NodeID].State)
+	}
+
+	events, err := svc.ListEvents(runID)
+	if err != nil {
+		t.Fatalf("list events: %v", err)
+	}
+	assertEventTypesPresentInOrder(t, events, []rt.EventType{
+		rt.EventWorkflowStarted,
+		rt.EventLeaseGranted,
+		rt.EventNodeStarted,
+		rt.EventCheckpointReached,
+		rt.EventLeaseGranted,
+		rt.EventNodeStarted,
+		rt.EventNodeCompleted,
+	})
+}
+
+func TestApproveCheckpointAfterRestartResumesNode(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	svc := api.New(dir)
+	if err := svc.RegisterWorker("worker-1", []rt.ActivityType{"gate"}); err != nil {
+		t.Fatalf("register worker: %v", err)
+	}
+
+	runID, err := svc.StartRun(rt.WorkflowDefinition{
+		Name: "checkpoint-restart",
+		Nodes: []rt.NodeDefinition{
+			{ID: "gate", ActivityType: "gate", CheckpointTimeout: time.Second},
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("start run: %v", err)
+	}
+
+	task, ok, err := svc.PollTask("worker-1", 250*time.Millisecond)
+	if err != nil {
+		t.Fatalf("poll task: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected task")
+	}
+	if err := svc.CompleteTask(rt.CompleteTaskRequest{
+		WorkerID:   "worker-1",
+		RunID:      runID,
+		NodeID:     task.NodeID,
+		Attempt:    task.Attempt,
+		Checkpoint: &rt.CheckpointRequest{Reason: "hold"},
+	}); err != nil {
+		t.Fatalf("request checkpoint: %v", err)
+	}
+
+	waitForNodeState(t, svc, runID, "gate", rt.NodeStateAwaitingApproval)
+
+	svc = api.New(dir)
+	if err := svc.RegisterWorker("worker-1", []rt.ActivityType{"gate"}); err != nil {
+		t.Fatalf("register worker after restart: %v", err)
+	}
+
+	view, err := svc.GetRun(runID)
+	if err != nil {
+		t.Fatalf("get run after restart: %v", err)
+	}
+	if view.Nodes["gate"].State != rt.NodeStateAwaitingApproval {
+		t.Fatalf("expected waiting node after restart, got %s", view.Nodes["gate"].State)
+	}
+
+	if err := svc.ApproveCheckpoint(runID, "gate"); err != nil {
+		t.Fatalf("approve checkpoint: %v", err)
+	}
+
+	task, ok, err = svc.PollTask("worker-1", 250*time.Millisecond)
+	if err != nil {
+		t.Fatalf("poll resumed task: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected resumed task")
+	}
+	if task.NodeID != "gate" || task.Attempt != 2 {
+		t.Fatalf("expected resumed gate attempt 2, got %+v", task)
+	}
+	if err := svc.CompleteTask(rt.CompleteTaskRequest{
+		WorkerID: "worker-1",
+		RunID:    runID,
+		NodeID:   task.NodeID,
+		Attempt:  task.Attempt,
+		Output:   map[string]any{"status": "approved"},
+	}); err != nil {
+		t.Fatalf("complete resumed task: %v", err)
+	}
+
+	waitForRunState(t, svc, runID, rt.RunStateCompleted)
+
+	events, err := svc.ListEvents(runID)
+	if err != nil {
+		t.Fatalf("list events: %v", err)
+	}
+	assertEventTypesPresentInOrder(t, events, []rt.EventType{
+		rt.EventWorkflowStarted,
+		rt.EventLeaseGranted,
+		rt.EventNodeStarted,
+		rt.EventCheckpointReached,
+		rt.EventCheckpointApproved,
+		rt.EventLeaseGranted,
+		rt.EventNodeStarted,
+		rt.EventNodeCompleted,
+		rt.EventWorkflowCompleted,
+	})
+}
+
+func TestCheckpointTimeoutFailsWaitingNode(t *testing.T) {
+	t.Parallel()
+
+	svc := api.New(t.TempDir())
+	if err := svc.RegisterWorker("worker-1", []rt.ActivityType{"gate"}); err != nil {
+		t.Fatalf("register worker: %v", err)
+	}
+
+	runID, err := svc.StartRun(rt.WorkflowDefinition{
+		Name: "checkpoint-timeout",
+		Nodes: []rt.NodeDefinition{
+			{ID: "gate", ActivityType: "gate", CheckpointTimeout: 80 * time.Millisecond},
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("start run: %v", err)
+	}
+
+	task, ok, err := svc.PollTask("worker-1", 250*time.Millisecond)
+	if err != nil {
+		t.Fatalf("poll task: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected task")
+	}
+	if err := svc.CompleteTask(rt.CompleteTaskRequest{
+		WorkerID:   "worker-1",
+		RunID:      runID,
+		NodeID:     task.NodeID,
+		Attempt:    task.Attempt,
+		Checkpoint: &rt.CheckpointRequest{Reason: "wait"},
+	}); err != nil {
+		t.Fatalf("request checkpoint: %v", err)
+	}
+
+	waitForNodeState(t, svc, runID, "gate", rt.NodeStateFailed)
+	waitForRunState(t, svc, runID, rt.RunStateFailed)
+
+	view, err := svc.GetRun(runID)
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	if got := view.Nodes["gate"].LastError; got != "checkpoint approval timed out" {
+		t.Fatalf("expected checkpoint timeout error, got %q", got)
+	}
+
+	events, err := svc.ListEvents(runID)
+	if err != nil {
+		t.Fatalf("list events: %v", err)
+	}
+	assertEventTypesPresentInOrder(t, events, []rt.EventType{
+		rt.EventWorkflowStarted,
+		rt.EventLeaseGranted,
+		rt.EventNodeStarted,
+		rt.EventCheckpointReached,
+		rt.EventTimerScheduled,
+		rt.EventTimerFired,
+		rt.EventNodeFailed,
+		rt.EventWorkflowFailed,
+	})
+}
+
+func TestAbsoluteDeadlineStillFailsNodeWhileAwaitingApproval(t *testing.T) {
+	t.Parallel()
+
+	svc := api.New(t.TempDir())
+	if err := svc.RegisterWorker("worker-1", []rt.ActivityType{"gate"}); err != nil {
+		t.Fatalf("register worker: %v", err)
+	}
+
+	runID, err := svc.StartRun(rt.WorkflowDefinition{
+		Name: "absolute-during-approval",
+		Nodes: []rt.NodeDefinition{
+			{
+				ID:                "gate",
+				ActivityType:      "gate",
+				CheckpointTimeout: time.Second,
+				AbsoluteDeadline:  80 * time.Millisecond,
+			},
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("start run: %v", err)
+	}
+
+	task, ok, err := svc.PollTask("worker-1", 250*time.Millisecond)
+	if err != nil {
+		t.Fatalf("poll task: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected task")
+	}
+	if err := svc.CompleteTask(rt.CompleteTaskRequest{
+		WorkerID:   "worker-1",
+		RunID:      runID,
+		NodeID:     task.NodeID,
+		Attempt:    task.Attempt,
+		Checkpoint: &rt.CheckpointRequest{Reason: "hold"},
+	}); err != nil {
+		t.Fatalf("request checkpoint: %v", err)
+	}
+
+	waitForNodeState(t, svc, runID, "gate", rt.NodeStateFailed)
+	waitForRunState(t, svc, runID, rt.RunStateFailed)
+
+	view, err := svc.GetRun(runID)
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	if got := view.Nodes["gate"].LastError; got != "absolute deadline exceeded" {
+		t.Fatalf("expected absolute deadline failure while awaiting approval, got %q", got)
+	}
+
+	events, err := svc.ListEvents(runID)
+	if err != nil {
+		t.Fatalf("list events: %v", err)
+	}
+	assertEventTypesPresentInOrder(t, events, []rt.EventType{
+		rt.EventWorkflowStarted,
+		rt.EventLeaseGranted,
+		rt.EventNodeStarted,
+		rt.EventTimerScheduled,
+		rt.EventCheckpointReached,
+		rt.EventTimerFired,
+		rt.EventNodeFailed,
+		rt.EventWorkflowFailed,
+	})
+}
+
+func TestCancelRunSuppressesRemainingWorkAndReachesCancelledOutcome(t *testing.T) {
+	t.Parallel()
+
+	svc := api.New(t.TempDir())
+	if err := svc.RegisterWorker("worker-1", []rt.ActivityType{"step"}); err != nil {
+		t.Fatalf("register worker: %v", err)
+	}
+
+	runID, err := svc.StartRun(rt.WorkflowDefinition{
+		Name: "cancel-run",
+		Nodes: []rt.NodeDefinition{
+			{ID: "A", ActivityType: "step"},
+			{ID: "B", ActivityType: "step", DependsOn: []string{"A"}},
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("start run: %v", err)
+	}
+
+	task, ok, err := svc.PollTask("worker-1", 250*time.Millisecond)
+	if err != nil {
+		t.Fatalf("poll task: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected running task before cancellation")
+	}
+	if task.NodeID != "A" {
+		t.Fatalf("expected A to start first, got %s", task.NodeID)
+	}
+
+	if err := svc.CancelRun(runID); err != nil {
+		t.Fatalf("cancel run: %v", err)
+	}
+
+	noTask, ok, err := svc.PollTask("worker-1", 50*time.Millisecond)
+	if err != nil {
+		t.Fatalf("poll after cancellation: %v", err)
+	}
+	if ok {
+		t.Fatalf("did not expect new work after cancellation, got %+v", noTask)
+	}
+
+	view, err := svc.GetRun(runID)
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	if got := view.Nodes["B"].State; got != rt.NodeStateCancelled {
+		t.Fatalf("expected pending node B to cancel immediately, got %s", got)
+	}
+	if got := view.State; got != rt.RunStateRunning {
+		t.Fatalf("expected run to stay running until active work acks cancel, got %s", got)
+	}
+
+	if err := svc.FailTask(rt.FailTaskRequest{
+		WorkerID:  "worker-1",
+		RunID:     runID,
+		NodeID:    "A",
+		Attempt:   task.Attempt,
+		Cancelled: true,
+		Message:   "cancelled by operator",
+	}); err != nil {
+		t.Fatalf("cancel running task: %v", err)
+	}
+
+	waitForRunState(t, svc, runID, rt.RunStateCancelled)
+
+	view, err = svc.GetRun(runID)
+	if err != nil {
+		t.Fatalf("get final run: %v", err)
+	}
+	if got := view.Nodes["A"].State; got != rt.NodeStateCancelled {
+		t.Fatalf("expected running node A to become cancelled, got %s", got)
+	}
+
+	events, err := svc.ListEvents(runID)
+	if err != nil {
+		t.Fatalf("list events: %v", err)
+	}
+	assertEventTypesPresentInOrder(t, events, []rt.EventType{
+		rt.EventWorkflowStarted,
+		rt.EventLeaseGranted,
+		rt.EventNodeStarted,
+		rt.EventCancellationRequested,
+		rt.EventNodeCancelled,
+		rt.EventNodeCancelled,
+		rt.EventCancellationCompleted,
+	})
+}
+
+func TestCancelRunImmediatelyCancelsAwaitingApprovalNode(t *testing.T) {
+	t.Parallel()
+
+	svc := api.New(t.TempDir())
+	if err := svc.RegisterWorker("worker-1", []rt.ActivityType{"gate"}); err != nil {
+		t.Fatalf("register worker: %v", err)
+	}
+
+	runID, err := svc.StartRun(rt.WorkflowDefinition{
+		Name: "cancel-approval",
+		Nodes: []rt.NodeDefinition{
+			{ID: "gate", ActivityType: "gate", CheckpointTimeout: time.Second},
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("start run: %v", err)
+	}
+
+	task, ok, err := svc.PollTask("worker-1", 250*time.Millisecond)
+	if err != nil {
+		t.Fatalf("poll task: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected task")
+	}
+	if err := svc.CompleteTask(rt.CompleteTaskRequest{
+		WorkerID:   "worker-1",
+		RunID:      runID,
+		NodeID:     task.NodeID,
+		Attempt:    task.Attempt,
+		Checkpoint: &rt.CheckpointRequest{Reason: "wait"},
+	}); err != nil {
+		t.Fatalf("request checkpoint: %v", err)
+	}
+
+	waitForNodeState(t, svc, runID, "gate", rt.NodeStateAwaitingApproval)
+
+	if err := svc.CancelRun(runID); err != nil {
+		t.Fatalf("cancel run: %v", err)
+	}
+
+	waitForRunState(t, svc, runID, rt.RunStateCancelled)
+
+	view, err := svc.GetRun(runID)
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	if got := view.Nodes["gate"].State; got != rt.NodeStateCancelled {
+		t.Fatalf("expected awaiting approval node to become cancelled, got %s", got)
+	}
+}
+
+func TestCancelRunStillReachesCancelledAfterRunningWorkerDisappears(t *testing.T) {
+	t.Parallel()
+
+	svc := api.New(t.TempDir())
+	if err := svc.RegisterWorker("worker-1", []rt.ActivityType{"step"}); err != nil {
+		t.Fatalf("register worker: %v", err)
+	}
+
+	runID, err := svc.StartRun(rt.WorkflowDefinition{
+		Name: "cancel-after-lease-expiry",
+		Nodes: []rt.NodeDefinition{
+			{ID: "A", ActivityType: "step"},
+			{ID: "B", ActivityType: "step", DependsOn: []string{"A"}},
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("start run: %v", err)
+	}
+
+	task, ok, err := svc.PollTask("worker-1", 250*time.Millisecond)
+	if err != nil {
+		t.Fatalf("poll task: %v", err)
+	}
+	if !ok || task.NodeID != "A" {
+		t.Fatalf("expected running A before cancel, got %+v ok=%v", task, ok)
+	}
+
+	if err := svc.CancelRun(runID); err != nil {
+		t.Fatalf("cancel run: %v", err)
+	}
+
+	waitForNodeState(t, svc, runID, "A", rt.NodeStateCancelled)
+	waitForRunState(t, svc, runID, rt.RunStateCancelled)
+
+	view, err := svc.GetRun(runID)
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	if got := view.Nodes["B"].State; got != rt.NodeStateCancelled {
+		t.Fatalf("expected B cancelled, got %s", got)
+	}
+}
+
+func TestPermanentFailureTriggersSequentialCompensation(t *testing.T) {
+	t.Parallel()
+
+	svc := api.New(t.TempDir())
+	if err := svc.RegisterWorker("worker-1", []rt.ActivityType{"step", "undo"}); err != nil {
+		t.Fatalf("register worker: %v", err)
+	}
+
+	runID, err := svc.StartRun(rt.WorkflowDefinition{
+		Name: "compensate",
+		Nodes: []rt.NodeDefinition{
+			{ID: "A", ActivityType: "step", CompensationActivity: "undo"},
+			{ID: "B", ActivityType: "step", DependsOn: []string{"A"}, CompensationActivity: "undo"},
+			{ID: "C", ActivityType: "step", DependsOn: []string{"B"}},
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("start run: %v", err)
+	}
+
+	for _, nodeID := range []string{"A", "B"} {
+		task, ok, err := svc.PollTask("worker-1", 250*time.Millisecond)
+		if err != nil {
+			t.Fatalf("poll %s: %v", nodeID, err)
+		}
+		if !ok || task.NodeID != nodeID || task.Compensation {
+			t.Fatalf("expected forward task %s, got %+v ok=%v", nodeID, task, ok)
+		}
+		if err := svc.CompleteTask(rt.CompleteTaskRequest{
+			WorkerID: "worker-1",
+			RunID:    runID,
+			NodeID:   task.NodeID,
+			Attempt:  task.Attempt,
+			Output:   map[string]any{"status": "ok"},
+		}); err != nil {
+			t.Fatalf("complete %s: %v", nodeID, err)
+		}
+	}
+
+	task, ok, err := svc.PollTask("worker-1", 250*time.Millisecond)
+	if err != nil {
+		t.Fatalf("poll C: %v", err)
+	}
+	if !ok || task.NodeID != "C" || task.Compensation {
+		t.Fatalf("expected forward task C, got %+v ok=%v", task, ok)
+	}
+	if err := svc.FailTask(rt.FailTaskRequest{
+		WorkerID: "worker-1",
+		RunID:    runID,
+		NodeID:   task.NodeID,
+		Attempt:  task.Attempt,
+		Message:  "boom",
+	}); err != nil {
+		t.Fatalf("fail C: %v", err)
+	}
+
+	for _, nodeID := range []string{"B", "A"} {
+		task, ok, err := svc.PollTask("worker-1", 250*time.Millisecond)
+		if err != nil {
+			t.Fatalf("poll compensation %s: %v", nodeID, err)
+		}
+		if !ok || task.NodeID != nodeID || !task.Compensation || task.ActivityType != "undo" {
+			t.Fatalf("expected compensation task %s, got %+v ok=%v", nodeID, task, ok)
+		}
+		if err := svc.CompleteTask(rt.CompleteTaskRequest{
+			WorkerID:     "worker-1",
+			RunID:        runID,
+			NodeID:       task.NodeID,
+			Attempt:      task.Attempt,
+			Compensation: true,
+			Output:       map[string]any{"status": "undone"},
+		}); err != nil {
+			t.Fatalf("complete compensation %s: %v", nodeID, err)
+		}
+	}
+
+	waitForRunState(t, svc, runID, rt.RunStateCompensated)
+
+	events, err := svc.ListEvents(runID)
+	if err != nil {
+		t.Fatalf("list events: %v", err)
+	}
+	assertEventTypesPresentInOrder(t, events, []rt.EventType{
+		rt.EventWorkflowStarted,
+		rt.EventNodeCompleted,
+		rt.EventNodeCompleted,
+		rt.EventNodeFailed,
+		rt.EventCompensationStarted,
+		rt.EventCompensationTaskStarted,
+		rt.EventCompensationTaskCompleted,
+		rt.EventCompensationTaskStarted,
+		rt.EventCompensationTaskCompleted,
+		rt.EventCompensationCompleted,
+	})
+}
+
+func TestCompensationResumesAfterRestart(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	svc := api.New(dir)
+	if err := svc.RegisterWorker("worker-1", []rt.ActivityType{"step", "undo"}); err != nil {
+		t.Fatalf("register worker: %v", err)
+	}
+
+	runID, err := svc.StartRun(rt.WorkflowDefinition{
+		Name: "compensate-restart",
+		Nodes: []rt.NodeDefinition{
+			{ID: "A", ActivityType: "step", CompensationActivity: "undo"},
+			{ID: "B", ActivityType: "step", DependsOn: []string{"A"}, CompensationActivity: "undo"},
+			{ID: "C", ActivityType: "step", DependsOn: []string{"B"}},
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("start run: %v", err)
+	}
+
+	for _, nodeID := range []string{"A", "B"} {
+		task, ok, err := svc.PollTask("worker-1", 250*time.Millisecond)
+		if err != nil {
+			t.Fatalf("poll %s: %v", nodeID, err)
+		}
+		if !ok || task.NodeID != nodeID {
+			t.Fatalf("expected forward task %s, got %+v ok=%v", nodeID, task, ok)
+		}
+		if err := svc.CompleteTask(rt.CompleteTaskRequest{
+			WorkerID: "worker-1",
+			RunID:    runID,
+			NodeID:   task.NodeID,
+			Attempt:  task.Attempt,
+		}); err != nil {
+			t.Fatalf("complete %s: %v", nodeID, err)
+		}
+	}
+
+	task, ok, err := svc.PollTask("worker-1", 250*time.Millisecond)
+	if err != nil {
+		t.Fatalf("poll C: %v", err)
+	}
+	if !ok || task.NodeID != "C" {
+		t.Fatalf("expected C, got %+v ok=%v", task, ok)
+	}
+	if err := svc.FailTask(rt.FailTaskRequest{
+		WorkerID: "worker-1",
+		RunID:    runID,
+		NodeID:   task.NodeID,
+		Attempt:  task.Attempt,
+		Message:  "boom",
+	}); err != nil {
+		t.Fatalf("fail C: %v", err)
+	}
+
+	task, ok, err = svc.PollTask("worker-1", 250*time.Millisecond)
+	if err != nil {
+		t.Fatalf("poll first compensation: %v", err)
+	}
+	if !ok || task.NodeID != "B" || !task.Compensation {
+		t.Fatalf("expected first compensation for B, got %+v ok=%v", task, ok)
+	}
+	if err := svc.CompleteTask(rt.CompleteTaskRequest{
+		WorkerID:     "worker-1",
+		RunID:        runID,
+		NodeID:       task.NodeID,
+		Attempt:      task.Attempt,
+		Compensation: true,
+	}); err != nil {
+		t.Fatalf("complete first compensation: %v", err)
+	}
+
+	svc = api.New(dir)
+	if err := svc.RegisterWorker("worker-1", []rt.ActivityType{"step", "undo"}); err != nil {
+		t.Fatalf("register worker after restart: %v", err)
+	}
+
+	task, ok, err = svc.PollTask("worker-1", 250*time.Millisecond)
+	if err != nil {
+		t.Fatalf("poll remaining compensation after restart: %v", err)
+	}
+	if !ok || task.NodeID != "A" || !task.Compensation {
+		t.Fatalf("expected remaining compensation for A, got %+v ok=%v", task, ok)
+	}
+	if err := svc.CompleteTask(rt.CompleteTaskRequest{
+		WorkerID:     "worker-1",
+		RunID:        runID,
+		NodeID:       task.NodeID,
+		Attempt:      task.Attempt,
+		Compensation: true,
+	}); err != nil {
+		t.Fatalf("complete remaining compensation: %v", err)
+	}
+
+	waitForRunState(t, svc, runID, rt.RunStateCompensated)
+
+	events, err := svc.ListEvents(runID)
+	if err != nil {
+		t.Fatalf("list events: %v", err)
+	}
+	assertEventTypesPresentInOrder(t, events, []rt.EventType{
+		rt.EventCompensationStarted,
+		rt.EventCompensationTaskStarted,
+		rt.EventCompensationTaskCompleted,
+		rt.EventCompensationTaskStarted,
+		rt.EventCompensationTaskCompleted,
+		rt.EventCompensationCompleted,
+	})
+}
+
+func TestCompensationAttemptExpiresAndRedispatchesAfterRestart(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	svc := api.New(dir)
+	if err := svc.RegisterWorker("worker-1", []rt.ActivityType{"step", "undo"}); err != nil {
+		t.Fatalf("register worker-1: %v", err)
+	}
+	if err := svc.RegisterWorker("worker-2", []rt.ActivityType{"step", "undo"}); err != nil {
+		t.Fatalf("register worker-2: %v", err)
+	}
+
+	runID, err := svc.StartRun(rt.WorkflowDefinition{
+		Name: "compensation-expiry",
+		Nodes: []rt.NodeDefinition{
+			{ID: "A", ActivityType: "step", CompensationActivity: "undo"},
+			{ID: "B", ActivityType: "step", DependsOn: []string{"A"}},
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("start run: %v", err)
+	}
+
+	task, ok, err := svc.PollTask("worker-1", 250*time.Millisecond)
+	if err != nil {
+		t.Fatalf("poll A: %v", err)
+	}
+	if !ok || task.NodeID != "A" {
+		t.Fatalf("expected A, got %+v ok=%v", task, ok)
+	}
+	if err := svc.CompleteTask(rt.CompleteTaskRequest{
+		WorkerID: "worker-1",
+		RunID:    runID,
+		NodeID:   task.NodeID,
+		Attempt:  task.Attempt,
+	}); err != nil {
+		t.Fatalf("complete A: %v", err)
+	}
+
+	task, ok, err = svc.PollTask("worker-1", 250*time.Millisecond)
+	if err != nil {
+		t.Fatalf("poll B: %v", err)
+	}
+	if !ok || task.NodeID != "B" {
+		t.Fatalf("expected B, got %+v ok=%v", task, ok)
+	}
+	if err := svc.FailTask(rt.FailTaskRequest{
+		WorkerID: "worker-1",
+		RunID:    runID,
+		NodeID:   task.NodeID,
+		Attempt:  task.Attempt,
+		Message:  "boom",
+	}); err != nil {
+		t.Fatalf("fail B: %v", err)
+	}
+
+	task, ok, err = svc.PollTask("worker-1", 250*time.Millisecond)
+	if err != nil {
+		t.Fatalf("poll compensation: %v", err)
+	}
+	if !ok || task.NodeID != "A" || !task.Compensation {
+		t.Fatalf("expected compensation task A, got %+v ok=%v", task, ok)
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	svc = api.New(dir)
+	if err := svc.RegisterWorker("worker-2", []rt.ActivityType{"step", "undo"}); err != nil {
+		t.Fatalf("register worker-2 after restart: %v", err)
+	}
+
+	time.Sleep(175 * time.Millisecond)
+
+	task, ok, err = svc.PollTask("worker-2", 250*time.Millisecond)
+	if err != nil {
+		t.Fatalf("poll redispatched compensation: %v", err)
+	}
+	if !ok || task.NodeID != "A" || !task.Compensation || task.Attempt != 2 {
+		t.Fatalf("expected redispatched compensation attempt 2 for A, got %+v ok=%v", task, ok)
+	}
+	if err := svc.CompleteTask(rt.CompleteTaskRequest{
+		WorkerID:     "worker-2",
+		RunID:        runID,
+		NodeID:       task.NodeID,
+		Attempt:      task.Attempt,
+		Compensation: true,
+	}); err != nil {
+		t.Fatalf("complete redispatched compensation: %v", err)
+	}
+
+	waitForRunState(t, svc, runID, rt.RunStateCompensated)
+
+	events, err := svc.ListEvents(runID)
+	if err != nil {
+		t.Fatalf("list events: %v", err)
+	}
+	assertEventTypesPresentInOrder(t, events, []rt.EventType{
+		rt.EventCompensationStarted,
+		rt.EventCompensationTaskStarted,
+		rt.EventCompensationTaskExpired,
+		rt.EventCompensationTaskStarted,
+		rt.EventCompensationTaskCompleted,
+		rt.EventCompensationCompleted,
+	})
+}
+
 func TestCompletedNodeCanSpawnNewWorkInSameRun(t *testing.T) {
 	t.Parallel()
 
@@ -1248,4 +2051,26 @@ func waitForNodeState(t *testing.T, svc *api.Service, runID, nodeID string, want
 		t.Fatalf("get run: %v", err)
 	}
 	t.Fatalf("expected node %s to reach state %s, got %s", nodeID, want, view.Nodes[nodeID].State)
+}
+
+func waitForRunState(t *testing.T, svc *api.Service, runID string, want rt.RunState) {
+	t.Helper()
+
+	deadline := time.Now().Add(1 * time.Second)
+	for time.Now().Before(deadline) {
+		view, err := svc.GetRun(runID)
+		if err != nil {
+			t.Fatalf("get run: %v", err)
+		}
+		if view.State == want {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	view, err := svc.GetRun(runID)
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	t.Fatalf("expected run %s to reach state %s, got %s", runID, want, view.State)
 }

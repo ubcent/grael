@@ -9,30 +9,35 @@ import (
 )
 
 type ExecutionState struct {
-	RunID      string
-	Workflow   string
-	Input      map[string]any
-	RunState   rt.RunState
-	CreatedAt  time.Time
-	FinishedAt *time.Time
-	LastSeq    uint64
-	Nodes      map[string]*Node
-	Timers     map[string]*Timer
+	RunID              string
+	Workflow           string
+	Input              map[string]any
+	RunState           rt.RunState
+	CancelRequested    bool
+	CompensationStack  []CompensationEntry
+	ActiveCompensation *ActiveCompensation
+	CreatedAt          time.Time
+	FinishedAt         *time.Time
+	LastSeq            uint64
+	Nodes              map[string]*Node
+	Timers             map[string]*Timer
 }
 
 type Node struct {
-	ID                string
-	ActivityType      rt.ActivityType
-	DependsOn         []string
-	RetryPolicy       *rt.RetryPolicy
-	ExecutionDeadline time.Duration
-	AbsoluteDeadline  time.Duration
-	State             rt.NodeState
-	Attempt           uint32
-	WorkerID          string
-	LastHeartbeatAt   time.Time
-	LastError         string
-	Output            map[string]any
+	ID                   string
+	ActivityType         rt.ActivityType
+	DependsOn            []string
+	RetryPolicy          *rt.RetryPolicy
+	CompensationActivity rt.ActivityType
+	CheckpointTimeout    time.Duration
+	ExecutionDeadline    time.Duration
+	AbsoluteDeadline     time.Duration
+	State                rt.NodeState
+	Attempt              uint32
+	WorkerID             string
+	LastHeartbeatAt      time.Time
+	LastError            string
+	Output               map[string]any
 }
 
 type Timer struct {
@@ -42,6 +47,20 @@ type Timer struct {
 	Purpose rt.TimerPurpose
 	FireAt  time.Time
 	Fired   bool
+}
+
+type CompensationEntry struct {
+	NodeID       string
+	ActivityType rt.ActivityType
+	Completed    bool
+	Attempt      uint32
+}
+
+type ActiveCompensation struct {
+	NodeID          string
+	WorkerID        string
+	Attempt         uint32
+	LastHeartbeatAt time.Time
 }
 
 // New returns the empty derived state used both for new runs and full replay.
@@ -76,13 +95,15 @@ func (s *ExecutionState) Apply(event rt.Event) error {
 		s.CreatedAt = event.Timestamp
 		for _, def := range payload.Workflow.Nodes {
 			s.Nodes[def.ID] = &Node{
-				ID:                def.ID,
-				ActivityType:      def.ActivityType,
-				DependsOn:         slices.Clone(def.DependsOn),
-				RetryPolicy:       def.RetryPolicy,
-				ExecutionDeadline: def.ExecutionDeadline,
-				AbsoluteDeadline:  def.AbsoluteDeadline,
-				State:             rt.NodeStatePending,
+				ID:                   def.ID,
+				ActivityType:         def.ActivityType,
+				DependsOn:            slices.Clone(def.DependsOn),
+				RetryPolicy:          def.RetryPolicy,
+				CompensationActivity: def.CompensationActivity,
+				CheckpointTimeout:    def.CheckpointTimeout,
+				ExecutionDeadline:    def.ExecutionDeadline,
+				AbsoluteDeadline:     def.AbsoluteDeadline,
+				State:                rt.NodeStatePending,
 			}
 		}
 		// Readiness is derived, not stored independently. Recomputing it here keeps
@@ -102,10 +123,17 @@ func (s *ExecutionState) Apply(event rt.Event) error {
 		payload := event.Payload.(rt.HeartbeatRecordedPayload)
 		node, ok := s.Nodes[payload.NodeID]
 		if !ok {
+			if s.ActiveCompensation != nil && s.ActiveCompensation.NodeID == payload.NodeID && s.ActiveCompensation.Attempt == payload.Attempt && s.ActiveCompensation.WorkerID == payload.WorkerID {
+				s.ActiveCompensation.LastHeartbeatAt = event.Timestamp
+				break
+			}
 			return fmt.Errorf("heartbeat recorded for unknown node %q", payload.NodeID)
 		}
 		if node.Attempt == payload.Attempt && node.WorkerID == payload.WorkerID {
 			node.LastHeartbeatAt = event.Timestamp
+		}
+		if s.ActiveCompensation != nil && s.ActiveCompensation.NodeID == payload.NodeID && s.ActiveCompensation.Attempt == payload.Attempt && s.ActiveCompensation.WorkerID == payload.WorkerID {
+			s.ActiveCompensation.LastHeartbeatAt = event.Timestamp
 		}
 	case rt.EventLeaseExpired:
 		payload := event.Payload.(rt.LeaseExpiredPayload)
@@ -120,6 +148,48 @@ func (s *ExecutionState) Apply(event rt.Event) error {
 		node.WorkerID = ""
 		node.LastHeartbeatAt = time.Time{}
 		node.LastError = "lease expired"
+	case rt.EventCancellationRequested:
+		s.CancelRequested = true
+	case rt.EventCancellationCompleted:
+		s.RunState = rt.RunStateCancelled
+		finishedAt := event.Timestamp
+		s.FinishedAt = &finishedAt
+	case rt.EventCompensationStarted:
+		s.RunState = rt.RunStateCompensating
+	case rt.EventCompensationTaskStarted:
+		payload := event.Payload.(rt.CompensationTaskStartedPayload)
+		for i := range s.CompensationStack {
+			if s.CompensationStack[i].NodeID != payload.NodeID {
+				continue
+			}
+			s.CompensationStack[i].Attempt = payload.Attempt
+			s.ActiveCompensation = &ActiveCompensation{
+				NodeID:          payload.NodeID,
+				WorkerID:        payload.WorkerID,
+				Attempt:         payload.Attempt,
+				LastHeartbeatAt: event.Timestamp,
+			}
+			break
+		}
+	case rt.EventCompensationTaskCompleted:
+		payload := event.Payload.(rt.CompensationTaskCompletedPayload)
+		for i := range s.CompensationStack {
+			if s.CompensationStack[i].NodeID != payload.NodeID {
+				continue
+			}
+			s.CompensationStack[i].Completed = true
+			break
+		}
+		s.ActiveCompensation = nil
+	case rt.EventCompensationTaskExpired:
+		s.ActiveCompensation = nil
+	case rt.EventCompensationTaskFailed:
+		s.ActiveCompensation = nil
+	case rt.EventCompensationCompleted:
+		s.RunState = rt.RunStateCompensated
+		s.ActiveCompensation = nil
+		finishedAt := event.Timestamp
+		s.FinishedAt = &finishedAt
 	case rt.EventTimerScheduled:
 		payload := event.Payload.(rt.TimerScheduledPayload)
 		s.Timers[payload.TimerID] = &Timer{
@@ -147,6 +217,27 @@ func (s *ExecutionState) Apply(event rt.Event) error {
 				node.LastHeartbeatAt = time.Time{}
 			}
 		}
+	case rt.EventCheckpointReached:
+		payload := event.Payload.(rt.CheckpointReachedPayload)
+		node, ok := s.Nodes[payload.NodeID]
+		if !ok {
+			return fmt.Errorf("checkpoint reached for unknown node %q", payload.NodeID)
+		}
+		node.State = rt.NodeStateAwaitingApproval
+		node.WorkerID = ""
+		node.LastHeartbeatAt = time.Time{}
+		node.LastError = ""
+	case rt.EventCheckpointApproved:
+		payload := event.Payload.(rt.CheckpointApprovedPayload)
+		node, ok := s.Nodes[payload.NodeID]
+		if !ok {
+			return fmt.Errorf("checkpoint approved for unknown node %q", payload.NodeID)
+		}
+		if node.State == rt.NodeStateAwaitingApproval {
+			node.State = rt.NodeStateReady
+			node.WorkerID = ""
+			node.LastHeartbeatAt = time.Time{}
+		}
 	case rt.EventNodeReady:
 		payload := event.Payload.(rt.NodeReadyPayload)
 		node, ok := s.Nodes[payload.NodeID]
@@ -166,6 +257,16 @@ func (s *ExecutionState) Apply(event rt.Event) error {
 		node.WorkerID = payload.WorkerID
 		node.LastHeartbeatAt = event.Timestamp
 		node.State = rt.NodeStateRunning
+	case rt.EventNodeCancelled:
+		payload := event.Payload.(rt.NodeCancelledPayload)
+		node, ok := s.Nodes[payload.NodeID]
+		if !ok {
+			return fmt.Errorf("node cancelled for unknown node %q", payload.NodeID)
+		}
+		node.State = rt.NodeStateCancelled
+		node.WorkerID = ""
+		node.LastHeartbeatAt = time.Time{}
+		node.LastError = "cancelled"
 	case rt.EventNodeCompleted:
 		payload := event.Payload.(rt.NodeCompletedPayload)
 		node, ok := s.Nodes[payload.NodeID]
@@ -178,15 +279,23 @@ func (s *ExecutionState) Apply(event rt.Event) error {
 		node.LastHeartbeatAt = time.Time{}
 		node.LastError = ""
 		node.Output = payload.Output
+		if node.CompensationActivity != "" {
+			s.CompensationStack = append(s.CompensationStack, CompensationEntry{
+				NodeID:       node.ID,
+				ActivityType: node.CompensationActivity,
+			})
+		}
 		for _, def := range payload.SpawnedNodes {
 			s.Nodes[def.ID] = &Node{
-				ID:                def.ID,
-				ActivityType:      def.ActivityType,
-				DependsOn:         slices.Clone(def.DependsOn),
-				RetryPolicy:       def.RetryPolicy,
-				ExecutionDeadline: def.ExecutionDeadline,
-				AbsoluteDeadline:  def.AbsoluteDeadline,
-				State:             rt.NodeStatePending,
+				ID:                   def.ID,
+				ActivityType:         def.ActivityType,
+				DependsOn:            slices.Clone(def.DependsOn),
+				RetryPolicy:          def.RetryPolicy,
+				CompensationActivity: def.CompensationActivity,
+				CheckpointTimeout:    def.CheckpointTimeout,
+				ExecutionDeadline:    def.ExecutionDeadline,
+				AbsoluteDeadline:     def.AbsoluteDeadline,
+				State:                rt.NodeStatePending,
 			}
 		}
 		s.markReadyNodes()
@@ -238,7 +347,7 @@ func (s *ExecutionState) dependenciesCompleted(depIDs []string) bool {
 }
 
 func (s *ExecutionState) IsTerminal() bool {
-	return s.RunState == rt.RunStateCompleted || s.RunState == rt.RunStateFailed
+	return s.RunState == rt.RunStateCompleted || s.RunState == rt.RunStateFailed || s.RunState == rt.RunStateCancelled || s.RunState == rt.RunStateCompensated
 }
 
 // View materializes the external read model from the current derived state.

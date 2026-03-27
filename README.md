@@ -30,6 +30,12 @@ Or try the living-DAG scaffold around runtime spawn:
 ./grael start -workflow examples/workflows/living-dag.json -demo-worker
 ```
 
+Or exercise the Sprint 4 demo composition with spawn, approval, and compensation:
+
+```bash
+./grael start -workflow examples/workflows/living-dag-ops.json -demo-worker
+```
+
 `-demo-worker` starts a tiny in-process worker so the CLI exercises the same
 worker polling and completion surface as normal execution.
 

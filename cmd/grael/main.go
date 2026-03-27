@@ -74,14 +74,14 @@ func startRun(args []string) error {
 	}
 
 	svc := api.New(*dataDir)
-	if *demoWorker {
-		if err := startDemoWorker(svc, def); err != nil {
-			return err
-		}
-	}
 	runID, err := svc.StartRun(def, nil)
 	if err != nil {
 		return err
+	}
+	if *demoWorker {
+		if err := startDemoWorker(svc, runID, def); err != nil {
+			return err
+		}
 	}
 	if *demoWorker {
 		if err := waitForTerminalRun(svc, runID, *waitTimeout); err != nil {
@@ -182,7 +182,7 @@ Built-in examples:
   linear-noop`)
 }
 
-func startDemoWorker(svc *api.Service, def rt.WorkflowDefinition) error {
+func startDemoWorker(svc *api.Service, runID string, def rt.WorkflowDefinition) error {
 	activities := make([]rt.ActivityType, 0, len(def.Nodes))
 	seen := map[rt.ActivityType]struct{}{}
 	for _, node := range def.Nodes {
@@ -197,6 +197,13 @@ func startDemoWorker(svc *api.Service, def rt.WorkflowDefinition) error {
 			seen[rt.ActivityType("analyze")] = struct{}{}
 			activities = append(activities, rt.ActivityType("analyze"))
 		}
+		for _, extra := range []rt.ActivityType{"review", "finalize", "undo"} {
+			if _, exists := seen[extra]; exists {
+				continue
+			}
+			seen[extra] = struct{}{}
+			activities = append(activities, extra)
+		}
 	}
 	slices.Sort(activities)
 
@@ -207,32 +214,69 @@ func startDemoWorker(svc *api.Service, def rt.WorkflowDefinition) error {
 
 	go func() {
 		idleRounds := 0
+		reviewCheckpointed := false
+		reviewApproved := false
 		for idleRounds < 5 {
 			task, ok, err := svc.PollTask(workerID, 50*time.Millisecond)
 			if err != nil {
 				return
 			}
 			if !ok {
+				if !reviewApproved {
+					view, err := svc.GetRun(runID)
+					if err == nil {
+						reviewNode, ok := view.Nodes["review"]
+						if ok && reviewNode.State == rt.NodeStateAwaitingApproval {
+							if analyzeNode, analyzeOK := view.Nodes["analyze-1"]; analyzeOK && analyzeNode.State == rt.NodeStateCompleted {
+								_ = svc.ApproveCheckpoint(runID, "review")
+								reviewApproved = true
+							}
+						}
+					}
+				}
 				idleRounds++
 				continue
 			}
 			idleRounds = 0
 			req := rt.CompleteTaskRequest{
-				WorkerID: workerID,
-				RunID:    task.RunID,
-				NodeID:   task.NodeID,
-				Attempt:  task.Attempt,
+				WorkerID:     workerID,
+				RunID:        task.RunID,
+				NodeID:       task.NodeID,
+				Attempt:      task.Attempt,
+				Compensation: task.Compensation,
 				Output: map[string]any{
 					"status": "ok",
 				},
 			}
-			if task.ActivityType == "discover" {
+			switch {
+			case task.Compensation:
+				req.Output["compensated"] = true
+			case task.ActivityType == "discover" && def.Name == "living-dag":
 				req.SpawnedNodes = []rt.NodeDefinition{
 					{ID: "analyze-1", ActivityType: "analyze"},
 					{ID: "analyze-2", ActivityType: "analyze"},
 					{ID: "analyze-3", ActivityType: "analyze"},
 				}
 				req.Output["discovered"] = 3
+			case task.ActivityType == "discover" && def.Name == "living-dag-ops":
+				req.SpawnedNodes = []rt.NodeDefinition{
+					{ID: "analyze-1", ActivityType: "analyze", CompensationActivity: "undo"},
+					{ID: "review", ActivityType: "review", CompensationActivity: "undo"},
+					{ID: "finalize", ActivityType: "finalize", DependsOn: []string{"analyze-1", "review"}},
+				}
+				req.Output["discovered"] = 3
+			case task.ActivityType == "review" && !reviewCheckpointed:
+				reviewCheckpointed = true
+				req.Checkpoint = &rt.CheckpointRequest{Reason: "human review"}
+			case task.ActivityType == "finalize":
+				_ = svc.FailTask(rt.FailTaskRequest{
+					WorkerID: workerID,
+					RunID:    task.RunID,
+					NodeID:   task.NodeID,
+					Attempt:  task.Attempt,
+					Message:  "demo finalize failure",
+				})
+				continue
 			}
 			_ = svc.CompleteTask(req)
 		}
@@ -248,7 +292,7 @@ func waitForTerminalRun(svc *api.Service, runID string, timeout time.Duration) e
 		if err != nil {
 			return err
 		}
-		if view.State != rt.RunStateRunning {
+		if isTerminalRunState(view.State) {
 			return nil
 		}
 		if timeout > 0 && time.Now().After(deadline) {
@@ -256,6 +300,10 @@ func waitForTerminalRun(svc *api.Service, runID string, timeout time.Duration) e
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
+}
+
+func isTerminalRunState(state rt.RunState) bool {
+	return state == rt.RunStateCompleted || state == rt.RunStateFailed || state == rt.RunStateCancelled || state == rt.RunStateCompensated
 }
 
 func stdoutString(fn func() error) (string, error) {

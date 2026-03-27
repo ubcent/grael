@@ -121,6 +121,28 @@ Sprint 4 is complete when all of the following are true:
   - [UAT-C8-02-approval-after-restart.md](docs/uat/UAT-C8-02-approval-after-restart.md)
   - [UAT-C8-03-checkpoint-timeout.md](docs/uat/UAT-C8-03-checkpoint-timeout.md)
 
+Current status:
+
+- checkpoint waiting is now implemented through persisted `CheckpointReached` and `CheckpointApproved` events
+- a node can enter `AWAITING_APPROVAL` without globally blocking unrelated runnable work
+- `ApproveCheckpoint` resumes the waiting node, including after restart
+- `checkpoint_timeout` and absolute deadline enforcement both fail waiting approval nodes through persisted timer paths
+- `CancelRun` is now implemented through persisted cancellation events, immediate suppression of not-yet-started work, and cooperative cancellation completion for running work
+- cancelled runs now reach a terminal `CANCELLED` outcome instead of remaining indefinitely active
+- permanent failure now triggers persisted sequential compensation in reverse completion order for compensable nodes only
+- compensation progress survives restart, and lost in-flight compensation attempts now expire and redispatch instead of stranding the run
+- the checkpoint slice of Sprint 4 is covered by integration scenarios aligned to:
+  - [UAT-C5-04-absolute-deadline-during-approval.md](docs/uat/UAT-C5-04-absolute-deadline-during-approval.md)
+  - [UAT-C8-01-checkpoint-pauses-one-node.md](docs/uat/UAT-C8-01-checkpoint-pauses-one-node.md)
+  - [UAT-C8-02-approval-after-restart.md](docs/uat/UAT-C8-02-approval-after-restart.md)
+  - [UAT-C8-03-checkpoint-timeout.md](docs/uat/UAT-C8-03-checkpoint-timeout.md)
+- the cancellation slice of Sprint 4 is covered by integration scenarios aligned to:
+  - [UAT-C7-01-graceful-cancel.md](docs/uat/UAT-C7-01-graceful-cancel.md)
+- the compensation slice of Sprint 4 is covered by integration scenarios aligned to:
+  - [UAT-C7-02-failure-triggers-compensation.md](docs/uat/UAT-C7-02-failure-triggers-compensation.md)
+  - [UAT-C7-03-compensation-resumes-after-restart.md](docs/uat/UAT-C7-03-compensation-resumes-after-restart.md)
+- committed Sprint 4 scope is now implemented to the current baseline
+
 ---
 
 ## Stretch Goal

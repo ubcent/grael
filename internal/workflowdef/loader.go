@@ -74,12 +74,14 @@ func Normalize(def rt.WorkflowDefinition) (rt.WorkflowDefinition, error) {
 		}
 
 		normalized.Nodes = append(normalized.Nodes, rt.NodeDefinition{
-			ID:                node.ID,
-			ActivityType:      node.ActivityType,
-			DependsOn:         append([]string(nil), node.DependsOn...),
-			RetryPolicy:       normalizeRetryPolicy(node.RetryPolicy),
-			ExecutionDeadline: normalizeExecutionDeadline(node.ExecutionDeadline),
-			AbsoluteDeadline:  normalizeExecutionDeadline(node.AbsoluteDeadline),
+			ID:                   node.ID,
+			ActivityType:         node.ActivityType,
+			DependsOn:            append([]string(nil), node.DependsOn...),
+			RetryPolicy:          normalizeRetryPolicy(node.RetryPolicy),
+			CompensationActivity: node.CompensationActivity,
+			CheckpointTimeout:    normalizeExecutionDeadline(node.CheckpointTimeout),
+			ExecutionDeadline:    normalizeExecutionDeadline(node.ExecutionDeadline),
+			AbsoluteDeadline:     normalizeExecutionDeadline(node.AbsoluteDeadline),
 		})
 		seen[node.ID] = struct{}{}
 	}
