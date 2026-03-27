@@ -113,7 +113,7 @@ Provide the engine loop that continuously derives commands from state and turns 
 
 ### Goal
 
-Enable workers to poll, execute, and complete tasks under explicit lease ownership.
+Enable workers to poll, execute, and complete tasks under explicit lease ownership through an honest networked protocol.
 
 ### Scope
 
@@ -123,6 +123,7 @@ Enable workers to poll, execute, and complete tasks under explicit lease ownersh
 - `CompleteTask`
 - `FailTask`
 - `Heartbeat`
+- gRPC worker transport mapping
 - lease grant
 - lease expiry
 - stale result rejection
@@ -130,6 +131,7 @@ Enable workers to poll, execute, and complete tasks under explicit lease ownersh
 ### Acceptance Shape
 
 - workers can execute real tasks end-to-end
+- networked workers can use the same protocol semantics as in-process callers
 - lost workers do not leave tasks stuck forever
 - late results after lease expiry are rejected deterministically
 
@@ -137,6 +139,7 @@ Enable workers to poll, execute, and complete tasks under explicit lease ownersh
 
 - task duplication around expiry races
 - under-specified worker liveness semantics
+- transport code quietly widening or weakening the worker contract
 
 ---
 
@@ -258,7 +261,7 @@ Support approval gates on individual nodes while the rest of the run continues.
 
 ### Goal
 
-Expose a small but sufficient API for starting runs, controlling them, and observing current state plus raw history.
+Expose a small but sufficient API for starting runs, controlling them, and observing current state plus raw history through a thin transport layer.
 
 ### Scope
 
@@ -267,6 +270,9 @@ Expose a small but sufficient API for starting runs, controlling them, and obser
 - `ApproveCheckpoint`
 - `GetRun`
 - `ListEvents`
+- `StreamEvents`
+- `.proto` contract for orchestration, read, and worker transport
+- gRPC server over the existing service boundary
 - immediate reject on capacity
 
 ### Acceptance Shape
@@ -274,10 +280,14 @@ Expose a small but sufficient API for starting runs, controlling them, and obser
 - users can launch, inspect, and control runs without extra projection systems
 - `GetRun` exposes derived current state
 - `ListEvents` exposes forensic raw history
+- `StreamEvents` emits only committed events in sequence and can resume from `from_seq`
+- transport code remains a mapping layer instead of becoming runtime logic
 
 ### Key Risks
 
 - accidental introduction of duplicate source-of-truth read models
+- live event streaming that diverges from committed WAL history
+- transport-driven scope creep into auth, control-plane behavior, or engine semantics
 
 ---
 

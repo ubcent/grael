@@ -19,6 +19,8 @@ This file tracks Architecture Decision Records for Grael.
 | `0009` | [Checkpoints Must Not Block Unrelated Work](./0009-checkpoints-must-not-block-unrelated-work.md) | `Accepted` | Protects selective approval semantics |
 | `0010` | [Spawn Validation Must Happen Before Graph Mutation](./0010-spawn-validation-must-happen-before-graph-mutation.md) | `Accepted` | Protects the graph mutation boundary |
 | `0011` | [Compensation Applies Only To Completed Nodes](./0011-compensation-applies-only-to-completed-nodes.md) | `Accepted` | Keeps unwind semantics conservative and trustworthy |
+| `0012` | [Visual Demo Must Be A Read-Only Event-Derived Surface](./0012-visual-demo-must-be-a-read-only-event-derived-surface.md) | `Accepted` | Keeps the post-v1 demo layer honest and non-authoritative |
+| `0013` | [gRPC Transport Must Remain A Thin Layer Over `api.Service`](./0013-grpc-transport-must-remain-a-thin-layer-over-api-service.md) | `Accepted` | Freezes the network transport boundary for the v1 service surface |
 
 ---
 

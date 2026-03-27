@@ -1913,6 +1913,76 @@ func TestSpawnedNodesRespectDynamicDependencies(t *testing.T) {
 	}
 }
 
+func TestSpawnedNodesCanDependOnExistingStaticNodes(t *testing.T) {
+	t.Parallel()
+
+	svc := api.New(t.TempDir())
+	if err := svc.RegisterWorker("worker-1", []rt.ActivityType{"discover", "review", "publish"}); err != nil {
+		t.Fatalf("register worker: %v", err)
+	}
+
+	runID, err := svc.StartRun(rt.WorkflowDefinition{
+		Name: "spawn-into-static",
+		Nodes: []rt.NodeDefinition{
+			{ID: "discover", ActivityType: "discover"},
+			{ID: "review", ActivityType: "review", DependsOn: []string{"discover"}},
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("start run: %v", err)
+	}
+
+	task, ok, err := svc.PollTask("worker-1", 250*time.Millisecond)
+	if err != nil {
+		t.Fatalf("poll discover: %v", err)
+	}
+	if !ok || task.NodeID != "discover" {
+		t.Fatalf("expected discover task, got %+v ok=%v", task, ok)
+	}
+
+	if err := svc.CompleteTask(rt.CompleteTaskRequest{
+		WorkerID: "worker-1",
+		RunID:    runID,
+		NodeID:   "discover",
+		Attempt:  task.Attempt,
+		SpawnedNodes: []rt.NodeDefinition{
+			{
+				ID:           "publish",
+				ActivityType: "publish",
+				DependsOn:    []string{"review"},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("complete discover with static dependency spawn: %v", err)
+	}
+
+	task, ok, err = svc.PollTask("worker-1", 250*time.Millisecond)
+	if err != nil {
+		t.Fatalf("poll review: %v", err)
+	}
+	if !ok || task.NodeID != "review" {
+		t.Fatalf("expected review task after discover, got %+v ok=%v", task, ok)
+	}
+
+	if err := svc.CompleteTask(rt.CompleteTaskRequest{
+		WorkerID: "worker-1",
+		RunID:    runID,
+		NodeID:   "review",
+		Attempt:  task.Attempt,
+		Output:   map[string]any{"status": "reviewed"},
+	}); err != nil {
+		t.Fatalf("complete review: %v", err)
+	}
+
+	task, ok, err = svc.PollTask("worker-1", 250*time.Millisecond)
+	if err != nil {
+		t.Fatalf("poll publish: %v", err)
+	}
+	if !ok || task.NodeID != "publish" {
+		t.Fatalf("expected spawned publish task after static dependency, got %+v ok=%v", task, ok)
+	}
+}
+
 func TestCycleProducingSpawnIsRejectedCleanly(t *testing.T) {
 	t.Parallel()
 

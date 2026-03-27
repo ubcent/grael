@@ -36,14 +36,43 @@ Or exercise the Sprint 4 demo composition with spawn, approval, and compensation
 ./grael start -workflow examples/workflows/living-dag-ops.json -demo-worker
 ```
 
-Or run the flagship composed demo with spawn, retry, approval, and final completion:
+Or run the flagship composed demo with real multi-worker execution, mid-run graph growth, retry recovery, approval, and final completion:
 
 ```bash
 ./grael start -workflow examples/workflows/core-demo.json -demo-worker
 ```
 
-`-demo-worker` starts a tiny in-process worker so the CLI exercises the same
-worker polling and completion surface as normal execution.
+`core-demo` now defaults to a slower `showcase` pacing profile so the live UI has
+time to animate and tell the story. For a quicker local/dev run, use:
+
+```bash
+./grael start -workflow examples/workflows/core-demo.json -demo-worker -demo-profile fast
+```
+
+And open the live visual demo in another terminal:
+
+```bash
+./bin/grael-demo
+```
+
+`-demo-worker` now starts an SDK-based local demo harness. For `core-demo`, it
+launches several demo workers so independent ready nodes really overlap through
+the public worker surface instead of a bespoke in-process task loop.
+
+The flagship `core-demo` tells a concrete morning incident briefing story:
+
+- static prep work collects customer escalations, checkout metrics, and the briefing shell
+- a planning step decides which follow-up checks to open
+- the graph fans out into concrete investigations, including one retryable failure
+- the editor approval gate waits while unrelated investigation work keeps moving
+- the investigation results flow back into the final briefing and publish path
+
+The visual demo is intentionally read-only and derived from `GetRun` plus
+`ListEvents`. Paste a run id into the UI and it will render the graph, status
+panels, and event timeline with polling-based live refresh.
+
+For the full Sprint 6 operator walkthrough, see
+`docs/SPRINT_6_DEMO_RUNBOOK.md`.
 
 Inspect current state:
 

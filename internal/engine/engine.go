@@ -1,11 +1,13 @@
 package engine
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"slices"
 	"sync"
 	"time"
@@ -506,6 +508,38 @@ func (e *Engine) ListEvents(runID string) ([]rt.Event, error) {
 		return nil, ErrRunNotFound
 	}
 	return events, nil
+}
+
+func (e *Engine) SubscribeEvents(ctx context.Context, runID string, fromSeq uint64) (<-chan rt.Event, error) {
+	ch, cancel, err := e.wal.Subscribe(runID, fromSeq)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, ErrRunNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	out := make(chan rt.Event)
+	go func() {
+		defer close(out)
+		defer cancel()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case event, ok := <-ch:
+				if !ok {
+					return
+				}
+				select {
+				case out <- event:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}
+	}()
+	return out, nil
 }
 
 func (e *Engine) WaitForQuiescence(runID string, timeout time.Duration) (bool, error) {
@@ -1356,17 +1390,13 @@ func normalizeSpawnedNodes(st *state.ExecutionState, parentNodeID string, spawne
 		return nil, nil
 	}
 
-	normalizedDef, err := workflowdef.Normalize(rt.WorkflowDefinition{
-		Name:  "spawn-validation",
-		Nodes: spawned,
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	normalizedSpawned := make([]rt.NodeDefinition, 0, len(normalizedDef.Nodes))
+	normalizedSpawned := make([]rt.NodeDefinition, 0, len(spawned))
 	spawnedIDs := make(map[string]struct{}, len(spawned))
-	for _, def := range normalizedDef.Nodes {
+	for _, candidate := range spawned {
+		def, err := workflowdef.NormalizeNode(candidate)
+		if err != nil {
+			return nil, err
+		}
 		if def.ID == "" {
 			return nil, fmt.Errorf("spawned node id is required")
 		}

@@ -18,12 +18,30 @@ import (
 var ErrCorruptTail = errors.New("wal: corrupt tail")
 
 type Store struct {
-	baseDir string
-	mu      sync.Mutex
+	baseDir     string
+	mu          sync.Mutex
+	subscribers map[string]map[uint64]*subscriber
+	nextSubID   uint64
 }
 
 func NewStore(baseDir string) *Store {
-	return &Store{baseDir: baseDir}
+	return &Store{
+		baseDir:     baseDir,
+		subscribers: map[string]map[uint64]*subscriber{},
+	}
+}
+
+type subscriber struct {
+	runID     string
+	id        uint64
+	store     *Store
+	ch        chan rt.Event
+	mu        sync.Mutex
+	cond      *sync.Cond
+	pending   []rt.Event
+	closed    bool
+	closeCh   chan struct{}
+	closeOnce sync.Once
 }
 
 type diskRecord struct {
@@ -38,9 +56,9 @@ type diskRecord struct {
 // Append persists exactly one event at the next durable sequence number.
 func (s *Store) Append(event rt.Event) (rt.Event, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	if err := os.MkdirAll(s.baseDir, 0o755); err != nil {
+		s.mu.Unlock()
 		return rt.Event{}, fmt.Errorf("create wal dir: %w", err)
 	}
 
@@ -48,6 +66,7 @@ func (s *Store) Append(event rt.Event) (rt.Event, error) {
 	// next sequence from the already persisted valid prefix of the run WAL.
 	events, _, err := s.scanLocked(event.RunID)
 	if err != nil && !errors.Is(err, ErrCorruptTail) {
+		s.mu.Unlock()
 		return rt.Event{}, err
 	}
 	event.Seq = uint64(len(events) + 1)
@@ -57,6 +76,7 @@ func (s *Store) Append(event rt.Event) (rt.Event, error) {
 
 	payload, err := json.Marshal(event.Payload)
 	if err != nil {
+		s.mu.Unlock()
 		return rt.Event{}, fmt.Errorf("marshal payload: %w", err)
 	}
 
@@ -71,18 +91,24 @@ func (s *Store) Append(event rt.Event) (rt.Event, error) {
 
 	line, err := json.Marshal(record)
 	if err != nil {
+		s.mu.Unlock()
 		return rt.Event{}, fmt.Errorf("marshal record: %w", err)
 	}
 
 	f, err := os.OpenFile(s.runPath(event.RunID), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
+		s.mu.Unlock()
 		return rt.Event{}, fmt.Errorf("open wal: %w", err)
 	}
 	defer f.Close()
 
 	if _, err := f.Write(append(line, '\n')); err != nil {
+		s.mu.Unlock()
 		return rt.Event{}, fmt.Errorf("append wal: %w", err)
 	}
+
+	s.broadcastLocked(event)
+	s.mu.Unlock()
 
 	return event, nil
 }
@@ -93,6 +119,40 @@ func (s *Store) List(runID string) ([]rt.Event, error) {
 	defer s.mu.Unlock()
 	events, _, err := s.scanLocked(runID)
 	return events, err
+}
+
+func (s *Store) Subscribe(runID string, afterSeq uint64) (<-chan rt.Event, func(), error) {
+	s.mu.Lock()
+	events, _, err := s.scanLocked(runID)
+	if err != nil && !errors.Is(err, ErrCorruptTail) {
+		s.mu.Unlock()
+		return nil, nil, err
+	}
+	if len(events) == 0 {
+		s.mu.Unlock()
+		return nil, nil, os.ErrNotExist
+	}
+
+	s.nextSubID++
+	sub := newSubscriber(s, runID, s.nextSubID)
+	for _, event := range events {
+		if event.Seq <= afterSeq {
+			continue
+		}
+		sub.pending = append(sub.pending, event)
+	}
+	if s.subscribers[runID] == nil {
+		s.subscribers[runID] = map[uint64]*subscriber{}
+	}
+	s.subscribers[runID][sub.id] = sub
+	s.mu.Unlock()
+
+	go sub.run()
+
+	cancel := func() {
+		sub.close()
+	}
+	return sub.ch, cancel, nil
 }
 
 func (s *Store) RunIDs() ([]string, error) {
@@ -123,6 +183,91 @@ func (s *Store) RunIDs() ([]string, error) {
 
 func (s *Store) runPath(runID string) string {
 	return filepath.Join(s.baseDir, runID+".wal")
+}
+
+func (s *Store) broadcastLocked(event rt.Event) {
+	for _, sub := range s.subscribers[event.RunID] {
+		sub.enqueue(event)
+	}
+}
+
+func (s *Store) removeSubscriber(runID string, id uint64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	runSubs := s.subscribers[runID]
+	if runSubs == nil {
+		return
+	}
+	delete(runSubs, id)
+	if len(runSubs) == 0 {
+		delete(s.subscribers, runID)
+	}
+}
+
+func newSubscriber(store *Store, runID string, id uint64) *subscriber {
+	sub := &subscriber{
+		runID:   runID,
+		id:      id,
+		store:   store,
+		ch:      make(chan rt.Event),
+		closeCh: make(chan struct{}),
+	}
+	sub.cond = sync.NewCond(&sub.mu)
+	return sub
+}
+
+func (s *subscriber) enqueue(event rt.Event) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return
+	}
+	s.pending = append(s.pending, event)
+	s.cond.Signal()
+}
+
+func (s *subscriber) run() {
+	defer close(s.ch)
+	defer s.store.removeSubscriber(s.runID, s.id)
+
+	for {
+		event, ok := s.next()
+		if !ok {
+			return
+		}
+
+		select {
+		case s.ch <- event:
+		case <-s.closeCh:
+			return
+		}
+	}
+}
+
+func (s *subscriber) next() (rt.Event, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for len(s.pending) == 0 && !s.closed {
+		s.cond.Wait()
+	}
+	if len(s.pending) == 0 {
+		return rt.Event{}, false
+	}
+	event := s.pending[0]
+	s.pending = s.pending[1:]
+	return event, true
+}
+
+func (s *subscriber) close() {
+	s.closeOnce.Do(func() {
+		s.mu.Lock()
+		s.closed = true
+		s.mu.Unlock()
+		close(s.closeCh)
+		s.cond.Broadcast()
+	})
 }
 
 func (s *Store) scanLocked(runID string) ([]rt.Event, bool, error) {

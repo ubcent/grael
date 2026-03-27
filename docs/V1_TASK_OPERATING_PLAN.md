@@ -66,6 +66,11 @@ The backlog remains the canonical spec-driven task definition. This file adds de
 | `T33` | `C10` | `P1` | `M` | `Medium` |  | Definition contract should stay minimal to avoid over-design |
 | `T34` | `C10` | `P2` | `M` | `Low` |  | Thin SDK seam should follow stable worker protocol, not precede it |
 | `T35` | `C11` | `P2` | `M` | `Medium` |  | Demo harness is composition work after lower-level slices are real |
+| `T41` | `C9` | `P1` | `S` | `Medium` |  | Proto contract is a stable external boundary and should stay smaller than the in-process types |
+| `T42` | `C9` | `P1` | `M` | `Medium` |  | Transport mapping must not become a second orchestration layer |
+| `T43` | `C4` | `P1` | `M` | `High` |  | Long-poll, heartbeat, and error mapping create transport-sensitive correctness risk |
+| `T44` | `C9` | `P1` | `M` | `High` |  | Live subscriptions are easy to get subtly wrong if they bypass committed order |
+| `T45` | `C11` | `P1` | `S` | `Medium` |  | The serve path is only valuable if the integration proof is real and runnable |
 
 ---
 
@@ -107,6 +112,18 @@ These tasks establish:
 - `T34`
 - `T35`
 
+### Bucket D: Network Transport Completion
+
+- `T41` to `T45`
+
+These tasks establish:
+
+- stable gRPC contract
+- thin remote orchestration access
+- thin remote worker transport
+- committed live event streaming
+- runnable local server entrypoint
+
 These tasks establish:
 
 - thin SDK seam
@@ -128,6 +145,8 @@ These tasks deserve extra design review, tighter acceptance discipline, or small
 - `T19` spawn validation and cycle rejection
 - `T24` compensation recovery after restart
 - `T28` checkpoint recovery across restart
+- `T43` network worker transport
+- `T44` committed event streaming
 
 ---
 

@@ -72,6 +72,67 @@ func TestGoWorkerSDKSeamHandlesTaskSuccessfully(t *testing.T) {
 	}
 }
 
+func TestGoWorkerSDKShutdownDoesNotReportContextCancelAsTaskFailure(t *testing.T) {
+	t.Parallel()
+
+	svc := api.New(t.TempDir())
+	worker := sdk.NewWorker(sdk.NewServiceClient(svc), "sdk-worker-shutdown")
+	worker.SetPollTimeout(25 * time.Millisecond)
+
+	taskStarted := make(chan struct{})
+	releaseTask := make(chan struct{})
+	worker.Handle("hello", func(ctx context.Context, task sdk.Task) (sdk.Result, error) {
+		close(taskStarted)
+		<-ctx.Done()
+		<-releaseTask
+		return sdk.Result{}, ctx.Err()
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- worker.Run(ctx)
+	}()
+
+	runID, err := svc.StartRun(rt.WorkflowDefinition{
+		Name: "sdk-run-shutdown",
+		Nodes: []rt.NodeDefinition{
+			{ID: "A", ActivityType: "hello"},
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("start run: %v", err)
+	}
+
+	select {
+	case <-taskStarted:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for task to start")
+	}
+
+	cancel()
+	close(releaseTask)
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("worker run returned error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for worker shutdown")
+	}
+
+	events, err := svc.ListEvents(runID)
+	if err != nil {
+		t.Fatalf("list events: %v", err)
+	}
+	for _, event := range events {
+		if event.Type == rt.EventNodeFailed {
+			t.Fatalf("expected shutdown path to avoid synthetic node failure, got %v", events)
+		}
+	}
+}
+
 func waitForRunState(t *testing.T, svc *api.Service, runID string, want rt.RunState) {
 	t.Helper()
 

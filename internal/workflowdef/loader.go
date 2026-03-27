@@ -63,26 +63,14 @@ func Normalize(def rt.WorkflowDefinition) (rt.WorkflowDefinition, error) {
 	}
 
 	for _, node := range def.Nodes {
-		if node.ID == "" {
-			return rt.WorkflowDefinition{}, errors.New("every node must have an id")
-		}
 		if _, exists := seen[node.ID]; exists {
 			return rt.WorkflowDefinition{}, fmt.Errorf("duplicate node id %q", node.ID)
 		}
-		if node.ActivityType == "" {
-			return rt.WorkflowDefinition{}, fmt.Errorf("node %q must define activity_type", node.ID)
+		normalizedNode, err := NormalizeNode(node)
+		if err != nil {
+			return rt.WorkflowDefinition{}, err
 		}
-
-		normalized.Nodes = append(normalized.Nodes, rt.NodeDefinition{
-			ID:                   node.ID,
-			ActivityType:         node.ActivityType,
-			DependsOn:            append([]string(nil), node.DependsOn...),
-			RetryPolicy:          normalizeRetryPolicy(node.RetryPolicy),
-			CompensationActivity: node.CompensationActivity,
-			CheckpointTimeout:    normalizeExecutionDeadline(node.CheckpointTimeout),
-			ExecutionDeadline:    normalizeExecutionDeadline(node.ExecutionDeadline),
-			AbsoluteDeadline:     normalizeExecutionDeadline(node.AbsoluteDeadline),
-		})
+		normalized.Nodes = append(normalized.Nodes, normalizedNode)
 		seen[node.ID] = struct{}{}
 	}
 
@@ -98,6 +86,26 @@ func Normalize(def rt.WorkflowDefinition) (rt.WorkflowDefinition, error) {
 	}
 
 	return normalized, nil
+}
+
+func NormalizeNode(node rt.NodeDefinition) (rt.NodeDefinition, error) {
+	if node.ID == "" {
+		return rt.NodeDefinition{}, errors.New("every node must have an id")
+	}
+	if node.ActivityType == "" {
+		return rt.NodeDefinition{}, fmt.Errorf("node %q must define activity_type", node.ID)
+	}
+
+	return rt.NodeDefinition{
+		ID:                   node.ID,
+		ActivityType:         node.ActivityType,
+		DependsOn:            append([]string(nil), node.DependsOn...),
+		RetryPolicy:          normalizeRetryPolicy(node.RetryPolicy),
+		CompensationActivity: node.CompensationActivity,
+		CheckpointTimeout:    normalizeExecutionDeadline(node.CheckpointTimeout),
+		ExecutionDeadline:    normalizeExecutionDeadline(node.ExecutionDeadline),
+		AbsoluteDeadline:     normalizeExecutionDeadline(node.AbsoluteDeadline),
+	}, nil
 }
 
 func normalizeRetryPolicy(policy *rt.RetryPolicy) *rt.RetryPolicy {

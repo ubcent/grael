@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"time"
 
 	"grael/internal/engine"
@@ -65,6 +66,10 @@ func (s *Service) GetRun(runID string) (rt.RunView, error) {
 
 func (s *Service) ListEvents(runID string) ([]rt.Event, error) {
 	return s.engine.ListEvents(runID)
+}
+
+func (s *Service) SubscribeEvents(ctx context.Context, runID string, fromSeq uint64) (<-chan rt.Event, error) {
+	return s.engine.SubscribeEvents(ctx, runID, fromSeq)
 }
 
 func (s *Service) WaitForQuiescence(runID string, timeout time.Duration) (bool, error) {

@@ -30,6 +30,7 @@ The v1 product promise is:
 - append-only WAL with crash recovery
 - deterministic orchestration logic
 - worker-based execution over gRPC
+- orchestration and inspection access over gRPC
 - persisted retries, leases, and timers
 - dynamic node spawn at runtime
 - human approval on specific nodes without blocking the whole run
@@ -111,6 +112,7 @@ The following capabilities define the actual Grael v1 implementation surface:
 - worker registry by activity type
 - task polling
 - success/failure completion
+- gRPC worker transport
 - heartbeat-driven liveness
 - lease tracking and expiry
 
@@ -141,6 +143,8 @@ The following capabilities define the actual Grael v1 implementation surface:
 - `ApproveCheckpoint`
 - `GetRun`
 - `ListEvents`
+- `StreamEvents`
+- gRPC orchestration/read transport
 
 ### Test Surface
 

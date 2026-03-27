@@ -535,6 +535,87 @@ Implementation note:
 
 ---
 
+## Wave 6: Network Transport And Integration Surface
+
+### T41. v1 gRPC proto contract and code generation
+
+- `Status`: `todo`
+- `Capability`: `C9`
+- `Goal`: Freeze the network contract that exposes Grael's existing service surface without moving business logic into the transport.
+- `Scope`:
+  - `proto/grael.proto`
+  - orchestration RPC message shapes
+  - worker protocol RPC message shapes
+  - `StreamEvents` message shape
+  - Go code generation wiring in `Makefile`
+- `Depends on`: `T9`, `T29`, `T30`, `T31`, `T33`
+- `Definition of Done`:
+  - supports [UAT-C9-04](docs/uat/UAT-C9-04-grpc-orchestration-surface.md)
+  - supports [UAT-C4-04](docs/uat/UAT-C4-04-network-worker-over-grpc.md)
+
+### T42. Thin gRPC orchestration and inspection server over `api.Service`
+
+- `Status`: `todo`
+- `Capability`: `C9`
+- `Goal`: Expose start/control/read APIs over gRPC while keeping `api.Service` as the semantic boundary.
+- `Scope`:
+  - gRPC server implementation package
+  - proto-to-runtime mapping for `StartRun`, `CancelRun`, `ApproveCheckpoint`, `GetRun`, and `ListEvents`
+  - `google.protobuf.Duration` and `Struct` mapping
+  - local unauthenticated v1 server configuration
+- `Depends on`: `T41`
+- `Definition of Done`:
+  - [UAT-C9-04](docs/uat/UAT-C9-04-grpc-orchestration-surface.md)
+
+### T43. Thin gRPC worker transport over the existing worker protocol
+
+- `Status`: `todo`
+- `Capability`: `C4`
+- `Goal`: Let remote workers use the same polling, completion, failure, and heartbeat semantics as local callers.
+- `Scope`:
+  - gRPC worker registration
+  - long-poll `PollTask`
+  - `CompleteTask`
+  - `FailTask`
+  - heartbeat transport mapping
+- `Depends on`: `T41`, `T42`
+- `Definition of Done`:
+  - [UAT-C4-04](docs/uat/UAT-C4-04-network-worker-over-grpc.md)
+  - supports [UAT-C4-03](docs/uat/UAT-C4-03-late-complete-rejected.md)
+
+### T44. Committed event subscription and `StreamEvents`
+
+- `Status`: `todo`
+- `Capability`: `C9`
+- `Goal`: Provide a live event feed derived only from committed event history so UIs and remote clients can watch progress without polling snapshots alone.
+- `Scope`:
+  - in-engine subscription registration by run id
+  - `from_seq` catch-up behavior
+  - sequential fan-out after WAL append
+  - gRPC server-streaming method for committed events
+- `Depends on`: `T31`, `T41`, `T42`
+- `Definition of Done`:
+  - [UAT-C9-05](docs/uat/UAT-C9-05-streamevents-follows-committed-history.md)
+
+### T45. `grael serve` command and remote integration acceptance slice
+
+- `Status`: `todo`
+- `Capability`: `C11`
+- `Goal`: Make the network surface runnable as a first-class local server and prove it through end-to-end acceptance coverage.
+- `Scope`:
+  - `grael serve --grpc-addr ... --data-dir ...`
+  - server lifecycle wiring beside the existing CLI
+  - remote orchestration happy-path test
+  - remote worker happy-path test
+  - `StreamEvents` integration coverage
+- `Depends on`: `T42`, `T43`, `T44`
+- `Definition of Done`:
+  - [UAT-C9-04](docs/uat/UAT-C9-04-grpc-orchestration-surface.md)
+  - [UAT-C4-04](docs/uat/UAT-C4-04-network-worker-over-grpc.md)
+  - [UAT-C9-05](docs/uat/UAT-C9-05-streamevents-follows-committed-history.md)
+
+---
+
 ## Suggested First Implementation Sequence
 
 Recommended order for execution:
@@ -545,6 +626,7 @@ Recommended order for execution:
 4. `T29` to `T32`
 5. `T20` to `T28`
 6. `T33` to `T35`
+7. `T41` to `T45`
 
 This order prioritizes a working durable execution core before deeper control-flow features and before the thin SDK/demo layer.
 

@@ -7,13 +7,18 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net"
 	"os"
-	"slices"
 	"time"
 
+	"grael/demo/harness"
 	"grael/internal/api"
+	grpcserver "grael/internal/grpcserver"
+	"grael/internal/grpcserver/pb"
 	rt "grael/internal/runtime"
 	"grael/internal/workflowdef"
+
+	"google.golang.org/grpc"
 )
 
 func main() {
@@ -38,6 +43,8 @@ func run(args []string) error {
 		return listEvents(args[1:])
 	case "snapshot":
 		return snapshotInfo(args[1:])
+	case "serve":
+		return serve(args[1:])
 	default:
 		printUsage()
 		return fmt.Errorf("unknown command %q", args[0])
@@ -50,6 +57,7 @@ func startRun(args []string) error {
 	workflowFile := fs.String("workflow", "", "path to workflow JSON file")
 	example := fs.String("example", "", "name of built-in example workflow")
 	demoWorker := fs.Bool("demo-worker", false, "start an in-process demo worker for the workflow activity types")
+	demoProfileName := fs.String("demo-profile", string(harness.ProfileShowcase), "demo pacing profile for -demo-worker: showcase or fast")
 	waitTimeout := fs.Duration("wait-timeout", 2*time.Second, "maximum time to wait for the initial run pass before exiting")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -73,23 +81,32 @@ func startRun(args []string) error {
 	if err != nil {
 		return err
 	}
+	profile, err := harness.ParseProfile(*demoProfileName)
+	if err != nil {
+		return err
+	}
+	resolvedWaitTimeout := *waitTimeout
+	if !flagExplicitlySet(fs, "wait-timeout") && *demoWorker {
+		resolvedWaitTimeout = harness.DefaultWaitTimeout(profile)
+	}
 
 	svc := api.New(*dataDir)
+	defer svc.Close()
 	runID, err := svc.StartRun(def, nil)
 	if err != nil {
 		return err
 	}
 	if *demoWorker {
-		if err := startDemoWorker(svc, runID, def); err != nil {
+		if err := startDemoWorkerWithProfile(svc, runID, def, profile); err != nil {
 			return err
 		}
 	}
 	if *demoWorker {
-		if err := waitForTerminalRun(svc, runID, *waitTimeout); err != nil {
+		if err := waitForTerminalRun(svc, runID, resolvedWaitTimeout); err != nil {
 			return err
 		}
 	} else {
-		if _, err := svc.WaitForQuiescence(runID, *waitTimeout); err != nil {
+		if _, err := svc.WaitForQuiescence(runID, resolvedWaitTimeout); err != nil {
 			return err
 		}
 	}
@@ -110,6 +127,7 @@ func getRun(args []string) error {
 	}
 
 	svc := api.New(*dataDir)
+	defer svc.Close()
 	view, err := svc.GetRun(*runID)
 	if err != nil {
 		return err
@@ -129,6 +147,7 @@ func listEvents(args []string) error {
 	}
 
 	svc := api.New(*dataDir)
+	defer svc.Close()
 	events, err := svc.ListEvents(*runID)
 	if err != nil {
 		return err
@@ -148,11 +167,34 @@ func snapshotInfo(args []string) error {
 	}
 
 	svc := api.New(*dataDir)
+	defer svc.Close()
 	info, err := svc.SnapshotInfo(*runID)
 	if err != nil {
 		return err
 	}
 	return printJSON(info)
+}
+
+func serve(args []string) error {
+	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
+	dataDir := fs.String("data-dir", ".grael-data", "directory for Grael WAL data")
+	grpcAddr := fs.String("grpc-addr", ":50051", "gRPC listen address")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	svc := api.New(*dataDir)
+	defer svc.Close()
+
+	listener, err := net.Listen("tcp", *grpcAddr)
+	if err != nil {
+		return err
+	}
+	defer listener.Close()
+
+	server := grpc.NewServer()
+	pb.RegisterGraelServer(server, grpcserver.New(svc))
+	return server.Serve(listener)
 }
 
 func printJSON(v any) error {
@@ -165,10 +207,11 @@ func printUsage() {
 	fmt.Println(`grael
 
 Commands:
-  start  (-workflow <file> | -example <name>) [-demo-worker] [-data-dir <dir>] [-wait-timeout <duration>]
+  start  (-workflow <file> | -example <name>) [-demo-worker] [-demo-profile <showcase|fast>] [-data-dir <dir>] [-wait-timeout <duration>]
   status -run-id <id> [-data-dir <dir>]
   events -run-id <id> [-data-dir <dir>]
   snapshot -run-id <id> [-data-dir <dir>]
+  serve [-grpc-addr <addr>] [-data-dir <dir>]
 
 Workflow definition example (JSON ingress format):
 {
@@ -184,175 +227,33 @@ Built-in examples:
 }
 
 func startDemoWorker(svc *api.Service, runID string, def rt.WorkflowDefinition) error {
-	return startDemoWorkerWithContext(context.Background(), svc, runID, def)
+	return startDemoWorkerWithProfile(svc, runID, def, harness.ProfileShowcase)
+}
+
+func startDemoWorkerWithProfile(svc *api.Service, runID string, def rt.WorkflowDefinition, profile harness.Profile) error {
+	return startDemoWorkerWithProfileAndContext(context.Background(), svc, runID, def, profile)
 }
 
 func startDemoWorkerWithContext(ctx context.Context, svc *api.Service, runID string, def rt.WorkflowDefinition) error {
-	activities := demoWorkerActivities(def)
-	const workerID = "demo-worker"
-	if err := svc.RegisterWorker(workerID, activities); err != nil {
-		return err
-	}
-
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			default:
-			}
-			task, ok, err := svc.PollTask(workerID, 50*time.Millisecond)
-			if err != nil {
-				return
-			}
-			if !ok {
-				if err := maybeApproveDemoCheckpoint(svc, runID, def); err != nil {
-					return
-				}
-				view, err := svc.GetRun(runID)
-				if err == nil && isTerminalRunState(view.State) {
-					return
-				}
-				continue
-			}
-			if err := handleDemoTask(svc, runID, def, workerID, task); err != nil {
-				return
-			}
-		}
-	}()
-
-	return nil
+	return startDemoWorkerWithProfileAndContext(ctx, svc, runID, def, harness.ProfileFast)
 }
 
-func demoWorkerActivities(def rt.WorkflowDefinition) []rt.ActivityType {
-	activities := make([]rt.ActivityType, 0, len(def.Nodes))
-	seen := map[rt.ActivityType]struct{}{}
-	for _, node := range def.Nodes {
-		if _, ok := seen[node.ActivityType]; ok {
-			continue
-		}
-		seen[node.ActivityType] = struct{}{}
-		activities = append(activities, node.ActivityType)
-	}
-	if _, ok := seen[rt.ActivityType("discover")]; ok {
-		for _, extra := range []rt.ActivityType{"analyze", "review", "finalize", "summarize", "undo"} {
-			if _, exists := seen[extra]; exists {
-				continue
-			}
-			seen[extra] = struct{}{}
-			activities = append(activities, extra)
-		}
-	}
-	slices.Sort(activities)
-	return activities
+func startDemoWorkerWithProfileAndContext(ctx context.Context, svc *api.Service, runID string, def rt.WorkflowDefinition, profile harness.Profile) error {
+	return startDemoWorkerWithID(ctx, svc, runID, def, "demo-worker", profile)
 }
 
-func handleDemoTask(svc *api.Service, runID string, def rt.WorkflowDefinition, workerID string, task rt.WorkerTask) error {
-	req := rt.CompleteTaskRequest{
-		WorkerID:     workerID,
-		RunID:        task.RunID,
-		NodeID:       task.NodeID,
-		Attempt:      task.Attempt,
-		Compensation: task.Compensation,
-		Output: map[string]any{
-			"status": "ok",
-		},
-	}
-	switch {
-	case task.Compensation:
-		req.Output["compensated"] = true
-	case task.ActivityType == "discover" && def.Name == "living-dag":
-		req.SpawnedNodes = []rt.NodeDefinition{
-			{ID: "analyze-1", ActivityType: "analyze"},
-			{ID: "analyze-2", ActivityType: "analyze"},
-			{ID: "analyze-3", ActivityType: "analyze"},
-		}
-		req.Output["discovered"] = 3
-	case task.ActivityType == "discover" && def.Name == "living-dag-ops":
-		req.SpawnedNodes = []rt.NodeDefinition{
-			{ID: "analyze-1", ActivityType: "analyze", CompensationActivity: "undo"},
-			{ID: "review", ActivityType: "review", CompensationActivity: "undo"},
-			{ID: "finalize", ActivityType: "finalize", DependsOn: []string{"analyze-1", "review"}},
-		}
-		req.Output["discovered"] = 3
-	case task.ActivityType == "discover" && def.Name == "core-demo":
-		req.SpawnedNodes = []rt.NodeDefinition{
-			{
-				ID:           "analyze-1",
-				ActivityType: "analyze",
-				RetryPolicy: &rt.RetryPolicy{
-					MaxAttempts: 2,
-					Backoff:     50 * time.Millisecond,
-				},
-			},
-			{ID: "analyze-2", ActivityType: "analyze"},
-			{ID: "review", ActivityType: "review", CheckpointTimeout: time.Second},
-			{ID: "summary", ActivityType: "summarize", DependsOn: []string{"analyze-1", "analyze-2", "review"}},
-		}
-		req.Output["discovered"] = 4
-	case def.Name == "core-demo" && task.NodeID == "analyze-1" && task.Attempt == 1:
-		return svc.FailTask(rt.FailTaskRequest{
-			WorkerID:  workerID,
-			RunID:     task.RunID,
-			NodeID:    task.NodeID,
-			Attempt:   task.Attempt,
-			Message:   "demo retryable analysis failure",
-			Retryable: true,
-		})
-	case task.ActivityType == "review":
-		reached, err := hasCheckpointReached(svc, runID, task.NodeID)
-		if err != nil {
-			return err
-		}
-		if !reached {
-			req.Checkpoint = &rt.CheckpointRequest{Reason: "human review"}
-		}
-	case task.ActivityType == "finalize":
-		return svc.FailTask(rt.FailTaskRequest{
-			WorkerID: workerID,
-			RunID:    task.RunID,
-			NodeID:   task.NodeID,
-			Attempt:  task.Attempt,
-			Message:  "demo finalize failure",
-		})
-	}
-	return svc.CompleteTask(req)
+func startDemoWorkerWithID(ctx context.Context, svc *api.Service, runID string, def rt.WorkflowDefinition, workerID string, profile harness.Profile) error {
+	return harness.StartWithPrefix(ctx, svc, runID, def, profile, workerID)
 }
 
-func maybeApproveDemoCheckpoint(svc *api.Service, runID string, def rt.WorkflowDefinition) error {
-	if def.Name != "living-dag-ops" && def.Name != "core-demo" {
-		return nil
-	}
-	view, err := svc.GetRun(runID)
-	if err != nil {
-		return err
-	}
-	reviewNode, ok := view.Nodes["review"]
-	if !ok || reviewNode.State != rt.NodeStateAwaitingApproval {
-		return nil
-	}
-	analyzeNode, analyzeOK := view.Nodes["analyze-1"]
-	if !analyzeOK || analyzeNode.State != rt.NodeStateCompleted {
-		return nil
-	}
-	return svc.ApproveCheckpoint(runID, "review")
-}
-
-func hasCheckpointReached(svc *api.Service, runID, nodeID string) (bool, error) {
-	events, err := svc.ListEvents(runID)
-	if err != nil {
-		return false, err
-	}
-	for _, event := range events {
-		if event.Type != rt.EventCheckpointReached {
-			continue
+func flagExplicitlySet(fs *flag.FlagSet, name string) bool {
+	explicit := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == name {
+			explicit = true
 		}
-		payload, ok := event.Payload.(rt.CheckpointReachedPayload)
-		if ok && payload.NodeID == nodeID {
-			return true, nil
-		}
-	}
-	return false, nil
+	})
+	return explicit
 }
 
 func waitForTerminalRun(svc *api.Service, runID string, timeout time.Duration) error {

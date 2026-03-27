@@ -1,0 +1,168 @@
+syntax = "proto3";
+
+package grael.v1;
+
+option go_package = "grael/internal/grpcserver/pb;pb";
+
+import "google/protobuf/duration.proto";
+import "google/protobuf/empty.proto";
+import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
+
+service Grael {
+  rpc StartRun(StartRunRequest) returns (StartRunResponse);
+  rpc CancelRun(CancelRunRequest) returns (google.protobuf.Empty);
+  rpc ApproveCheckpoint(ApproveCheckpointRequest) returns (google.protobuf.Empty);
+  rpc GetRun(GetRunRequest) returns (RunView);
+  rpc StreamEvents(StreamEventsRequest) returns (stream Event);
+
+  rpc RegisterWorker(RegisterWorkerRequest) returns (google.protobuf.Empty);
+  rpc PollTask(PollTaskRequest) returns (PollTaskResponse);
+  rpc CompleteTask(CompleteTaskRequest) returns (google.protobuf.Empty);
+  rpc FailTask(FailTaskRequest) returns (google.protobuf.Empty);
+  rpc Heartbeat(HeartbeatRequest) returns (google.protobuf.Empty);
+
+  rpc ListEvents(ListEventsRequest) returns (ListEventsResponse);
+}
+
+message RetryPolicy {
+  int32 max_attempts = 1;
+  google.protobuf.Duration backoff = 2;
+}
+
+message NodeDefinition {
+  string id = 1;
+  string activity_type = 2;
+  repeated string depends_on = 3;
+  RetryPolicy retry_policy = 4;
+  string compensation_activity = 5;
+  google.protobuf.Duration checkpoint_timeout = 6;
+  google.protobuf.Duration execution_deadline = 7;
+  google.protobuf.Duration absolute_deadline = 8;
+}
+
+message WorkflowDefinition {
+  string name = 1;
+  repeated NodeDefinition nodes = 2;
+}
+
+message StartRunRequest {
+  WorkflowDefinition workflow = 1;
+  google.protobuf.Struct input = 2;
+}
+
+message StartRunResponse {
+  string run_id = 1;
+}
+
+message CancelRunRequest {
+  string run_id = 1;
+}
+
+message ApproveCheckpointRequest {
+  string run_id = 1;
+  string node_id = 2;
+}
+
+message GetRunRequest {
+  string run_id = 1;
+}
+
+message NodeView {
+  string id = 1;
+  string activity_type = 2;
+  string state = 3;
+  repeated string depends_on = 4;
+  uint32 attempt = 5;
+  string worker_id = 6;
+  string last_error = 7;
+}
+
+message RunView {
+  string run_id = 1;
+  string workflow = 2;
+  string definition_hash = 3;
+  string state = 4;
+  uint64 last_seq = 5;
+  map<string, NodeView> nodes = 6;
+  google.protobuf.Timestamp created_at = 7;
+  google.protobuf.Timestamp finished_at = 8;
+}
+
+message StreamEventsRequest {
+  string run_id = 1;
+  uint64 from_seq = 2;
+}
+
+message Event {
+  uint64 seq = 1;
+  string run_id = 2;
+  string type = 3;
+  google.protobuf.Timestamp timestamp = 4;
+  bytes payload = 5;
+}
+
+message RegisterWorkerRequest {
+  string worker_id = 1;
+  repeated string activity_types = 2;
+}
+
+message PollTaskRequest {
+  string worker_id = 1;
+  int64 timeout_ms = 2;
+}
+
+message WorkerTask {
+  string run_id = 1;
+  string node_id = 2;
+  string activity_type = 3;
+  uint32 attempt = 4;
+  bool compensation = 5;
+  string workflow = 6;
+  google.protobuf.Struct workflow_input = 7;
+}
+
+message PollTaskResponse {
+  WorkerTask task = 1;
+}
+
+message CheckpointRequest {
+  string reason = 1;
+}
+
+message CompleteTaskRequest {
+  string worker_id = 1;
+  string run_id = 2;
+  string node_id = 3;
+  uint32 attempt = 4;
+  bool compensation = 5;
+  google.protobuf.Struct output = 6;
+  CheckpointRequest checkpoint = 7;
+  repeated NodeDefinition spawned_nodes = 8;
+}
+
+message FailTaskRequest {
+  string worker_id = 1;
+  string run_id = 2;
+  string node_id = 3;
+  uint32 attempt = 4;
+  bool compensation = 5;
+  string message = 6;
+  bool cancelled = 7;
+  bool retryable = 8;
+}
+
+message HeartbeatRequest {
+  string worker_id = 1;
+  string run_id = 2;
+  string node_id = 3;
+  uint32 attempt = 4;
+}
+
+message ListEventsRequest {
+  string run_id = 1;
+}
+
+message ListEventsResponse {
+  repeated Event events = 1;
+}

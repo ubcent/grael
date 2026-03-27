@@ -49,6 +49,58 @@ func TestListStopsAtCorruptTail(t *testing.T) {
 	}
 }
 
+func TestSubscribeReplaysCommittedHistoryThenStreamsLiveAppends(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	store := wal.NewStore(dir)
+	runID := "run-stream"
+
+	first, err := store.Append(rt.Event{
+		RunID:     runID,
+		Type:      rt.EventWorkflowStarted,
+		Timestamp: time.Now().UTC(),
+		Payload:   payloadFor(rt.EventWorkflowStarted),
+	})
+	if err != nil {
+		t.Fatalf("append first event: %v", err)
+	}
+
+	events, cancel, err := store.Subscribe(runID, 0)
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	defer cancel()
+
+	select {
+	case event := <-events:
+		if event.Seq != first.Seq || event.Type != first.Type {
+			t.Fatalf("expected replayed first event %+v, got %+v", first, event)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for replayed event")
+	}
+
+	second, err := store.Append(rt.Event{
+		RunID:     runID,
+		Type:      rt.EventWorkflowCompleted,
+		Timestamp: time.Now().UTC(),
+		Payload:   payloadFor(rt.EventWorkflowCompleted),
+	})
+	if err != nil {
+		t.Fatalf("append second event: %v", err)
+	}
+
+	select {
+	case event := <-events:
+		if event.Seq != second.Seq || event.Type != second.Type {
+			t.Fatalf("expected live second event %+v, got %+v", second, event)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for live event")
+	}
+}
+
 func payloadFor(eventType rt.EventType) interface{} {
 	switch eventType {
 	case rt.EventWorkflowStarted:

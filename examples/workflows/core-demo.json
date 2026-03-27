@@ -2,8 +2,33 @@
   "name": "core-demo",
   "nodes": [
     {
-      "id": "discover",
-      "activity_type": "discover"
+      "id": "collect-customer-escalations",
+      "activity_type": "collect_signals"
+    },
+    {
+      "id": "pull-checkout-metrics",
+      "activity_type": "collect_metrics"
+    },
+    {
+      "id": "prepare-brief-outline",
+      "activity_type": "prepare_brief"
+    },
+    {
+      "id": "decide-follow-up-checks",
+      "activity_type": "plan_follow_up",
+      "depends_on": [
+        "collect-customer-escalations",
+        "pull-checkout-metrics",
+        "prepare-brief-outline"
+      ]
+    },
+    {
+      "id": "editor-approval",
+      "activity_type": "review",
+      "depends_on": [
+        "decide-follow-up-checks"
+      ],
+      "checkpoint_timeout": 20000000000
     }
   ]
 }

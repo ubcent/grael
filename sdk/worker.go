@@ -104,6 +104,11 @@ func (w *Worker) Run(ctx context.Context) error {
 		}
 		result, err := handler(ctx, Task{WorkerTask: task})
 		if err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil && errors.Is(err, ctxErr) {
+				// Worker shutdown must not invent a task failure; the lease expiry
+				// path already provides the honest recovery mechanism.
+				return nil
+			}
 			taskErr := &TaskError{Message: err.Error()}
 			if errors.As(err, &taskErr) {
 				err = w.client.FailTask(rt.FailTaskRequest{
