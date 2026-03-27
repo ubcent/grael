@@ -12,6 +12,7 @@ import (
 	"grael/internal/state"
 	"grael/internal/wal"
 	"grael/internal/worker"
+	"grael/internal/workflowdef"
 )
 
 var (
@@ -121,16 +122,21 @@ func (e *Engine) CompleteTask(req rt.CompleteTaskRequest) error {
 	if node.State != rt.NodeStateRunning || node.WorkerID != req.WorkerID || node.Attempt != req.Attempt {
 		return ErrAttemptMismatch
 	}
+	normalizedSpawned, err := normalizeSpawnedNodes(st, req.NodeID, req.SpawnedNodes)
+	if err != nil {
+		return e.failNodeForInvalidSpawnLocked(st, req, err)
+	}
 
 	event, err := e.wal.Append(rt.Event{
 		RunID:     req.RunID,
 		Type:      rt.EventNodeCompleted,
 		Timestamp: time.Now().UTC(),
 		Payload: rt.NodeCompletedPayload{
-			NodeID:   req.NodeID,
-			WorkerID: req.WorkerID,
-			Attempt:  req.Attempt,
-			Output:   req.Output,
+			NodeID:       req.NodeID,
+			WorkerID:     req.WorkerID,
+			Attempt:      req.Attempt,
+			Output:       req.Output,
+			SpawnedNodes: normalizedSpawned,
 		},
 	})
 	if err != nil {
@@ -444,6 +450,34 @@ func (e *Engine) failWorkflowIfTerminalLocked(st *state.ExecutionState) error {
 		return err
 	}
 	return st.Apply(event)
+}
+
+func (e *Engine) failNodeForInvalidSpawnLocked(st *state.ExecutionState, req rt.CompleteTaskRequest, validationErr error) error {
+	event, err := e.wal.Append(rt.Event{
+		RunID:     req.RunID,
+		Type:      rt.EventNodeFailed,
+		Timestamp: time.Now().UTC(),
+		Payload: rt.NodeFailedPayload{
+			NodeID:    req.NodeID,
+			WorkerID:  req.WorkerID,
+			Attempt:   req.Attempt,
+			Message:   fmt.Sprintf("invalid spawned graph: %v", validationErr),
+			Retryable: false,
+		},
+	})
+	if err != nil {
+		return err
+	}
+	if err := st.Apply(event); err != nil {
+		return err
+	}
+	if err := e.failWorkflowIfTerminalLocked(st); err != nil {
+		return err
+	}
+	if err := e.snapshots.Save(st); err != nil {
+		return err
+	}
+	return validationErr
 }
 
 func allNodesCompleted(st *state.ExecutionState) bool {
@@ -760,4 +794,99 @@ func timeoutMessageFor(purpose rt.TimerPurpose) string {
 	default:
 		return "execution deadline exceeded"
 	}
+}
+
+func validateSpawnedNodes(st *state.ExecutionState, parentNodeID string, spawned []rt.NodeDefinition) error {
+	_, err := normalizeSpawnedNodes(st, parentNodeID, spawned)
+	return err
+}
+
+func normalizeSpawnedNodes(st *state.ExecutionState, parentNodeID string, spawned []rt.NodeDefinition) ([]rt.NodeDefinition, error) {
+	if len(spawned) == 0 {
+		return nil, nil
+	}
+
+	normalizedDef, err := workflowdef.Normalize(rt.WorkflowDefinition{
+		Name:  "spawn-validation",
+		Nodes: spawned,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	normalizedSpawned := make([]rt.NodeDefinition, 0, len(normalizedDef.Nodes))
+	spawnedIDs := make(map[string]struct{}, len(spawned))
+	for _, def := range normalizedDef.Nodes {
+		if def.ID == "" {
+			return nil, fmt.Errorf("spawned node id is required")
+		}
+		if def.ActivityType == "" {
+			return nil, fmt.Errorf("spawned node %q must define activity_type", def.ID)
+		}
+		if _, exists := st.Nodes[def.ID]; exists {
+			return nil, fmt.Errorf("spawned node %q already exists", def.ID)
+		}
+		if _, exists := spawnedIDs[def.ID]; exists {
+			return nil, fmt.Errorf("duplicate spawned node id %q", def.ID)
+		}
+		spawnedIDs[def.ID] = struct{}{}
+		normalizedSpawned = append(normalizedSpawned, def)
+	}
+
+	graph := make(map[string][]string, len(st.Nodes)+len(normalizedSpawned))
+	for id, node := range st.Nodes {
+		graph[id] = slices.Clone(node.DependsOn)
+	}
+	for _, def := range normalizedSpawned {
+		for _, dep := range def.DependsOn {
+			if dep == def.ID {
+				return nil, fmt.Errorf("spawned node %q cannot depend on itself", def.ID)
+			}
+			if _, ok := st.Nodes[dep]; !ok {
+				if _, ok := spawnedIDs[dep]; !ok {
+					return nil, fmt.Errorf("spawned node %q depends on unknown node %q", def.ID, dep)
+				}
+			}
+		}
+		graph[def.ID] = slices.Clone(def.DependsOn)
+	}
+
+	if hasCycle(graph) {
+		return nil, fmt.Errorf("spawn from %q would create a cycle", parentNodeID)
+	}
+	return normalizedSpawned, nil
+}
+
+func hasCycle(graph map[string][]string) bool {
+	const (
+		unvisited = 0
+		visiting  = 1
+		visited   = 2
+	)
+
+	stateByNode := make(map[string]int, len(graph))
+	var visit func(string) bool
+	visit = func(nodeID string) bool {
+		switch stateByNode[nodeID] {
+		case visiting:
+			return true
+		case visited:
+			return false
+		}
+		stateByNode[nodeID] = visiting
+		for _, dep := range graph[nodeID] {
+			if _, ok := graph[dep]; ok && visit(dep) {
+				return true
+			}
+		}
+		stateByNode[nodeID] = visited
+		return false
+	}
+
+	for nodeID := range graph {
+		if visit(nodeID) {
+			return true
+		}
+	}
+	return false
 }

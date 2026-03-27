@@ -101,6 +101,14 @@ Sprint 3 is complete when all of the following are true:
   - [UAT-C6-02-spawned-graph-restart-durability.md](docs/uat/UAT-C6-02-spawned-graph-restart-durability.md)
   - [UAT-C6-03-cycle-spawn-rejected.md](docs/uat/UAT-C6-03-cycle-spawn-rejected.md)
 
+Current status:
+
+- runtime completion payloads can now carry spawned node definitions
+- spawned nodes are inserted into the persisted run graph and survive restart
+- dynamic dependency readiness works for spawned nodes in the same run
+- invalid spawn attempts are rejected before cyclical graph state is accepted
+- `T17` through `T19` are implemented to the current baseline and covered by integration scenarios aligned to the Sprint 3 UATs
+
 ---
 
 ## Stretch Goal
@@ -115,6 +123,13 @@ Why:
 - it does not force context-switching into cancellation or checkpoints yet
 
 Do not treat the stretch goal as part of the committed sprint scope.
+
+Current stretch status:
+
+- stretch scaffolding is now started
+- the repository includes a file-based `living-dag` example that exercises spawn through the same CLI path as other examples
+- the CLI demo worker can complete a discovery node and return spawned work, producing a visible end-to-end living-DAG run
+- this is intentionally not the full `T35` composite demo yet; retry, checkpoint, and restart-story composition still belong to later work
 
 ---
 

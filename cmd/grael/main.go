@@ -192,6 +192,12 @@ func startDemoWorker(svc *api.Service, def rt.WorkflowDefinition) error {
 		seen[node.ActivityType] = struct{}{}
 		activities = append(activities, node.ActivityType)
 	}
+	if _, ok := seen[rt.ActivityType("discover")]; ok {
+		if _, exists := seen[rt.ActivityType("analyze")]; !exists {
+			seen[rt.ActivityType("analyze")] = struct{}{}
+			activities = append(activities, rt.ActivityType("analyze"))
+		}
+	}
 	slices.Sort(activities)
 
 	const workerID = "demo-worker"
@@ -211,7 +217,7 @@ func startDemoWorker(svc *api.Service, def rt.WorkflowDefinition) error {
 				continue
 			}
 			idleRounds = 0
-			_ = svc.CompleteTask(rt.CompleteTaskRequest{
+			req := rt.CompleteTaskRequest{
 				WorkerID: workerID,
 				RunID:    task.RunID,
 				NodeID:   task.NodeID,
@@ -219,7 +225,16 @@ func startDemoWorker(svc *api.Service, def rt.WorkflowDefinition) error {
 				Output: map[string]any{
 					"status": "ok",
 				},
-			})
+			}
+			if task.ActivityType == "discover" {
+				req.SpawnedNodes = []rt.NodeDefinition{
+					{ID: "analyze-1", ActivityType: "analyze"},
+					{ID: "analyze-2", ActivityType: "analyze"},
+					{ID: "analyze-3", ActivityType: "analyze"},
+				}
+				req.Output["discovered"] = 3
+			}
+			_ = svc.CompleteTask(req)
 		}
 	}()
 

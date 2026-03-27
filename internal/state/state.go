@@ -178,6 +178,17 @@ func (s *ExecutionState) Apply(event rt.Event) error {
 		node.LastHeartbeatAt = time.Time{}
 		node.LastError = ""
 		node.Output = payload.Output
+		for _, def := range payload.SpawnedNodes {
+			s.Nodes[def.ID] = &Node{
+				ID:                def.ID,
+				ActivityType:      def.ActivityType,
+				DependsOn:         slices.Clone(def.DependsOn),
+				RetryPolicy:       def.RetryPolicy,
+				ExecutionDeadline: def.ExecutionDeadline,
+				AbsoluteDeadline:  def.AbsoluteDeadline,
+				State:             rt.NodeStatePending,
+			}
+		}
 		s.markReadyNodes()
 	case rt.EventNodeFailed:
 		payload := event.Payload.(rt.NodeFailedPayload)

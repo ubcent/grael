@@ -24,6 +24,12 @@ Start a built-in example run:
 ./grael start -workflow examples/workflows/linear-noop.json -demo-worker
 ```
 
+Or try the living-DAG scaffold around runtime spawn:
+
+```bash
+./grael start -workflow examples/workflows/living-dag.json -demo-worker
+```
+
 `-demo-worker` starts a tiny in-process worker so the CLI exercises the same
 worker polling and completion surface as normal execution.
 

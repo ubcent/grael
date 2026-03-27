@@ -10,8 +10,6 @@ import (
 )
 
 func TestBuiltInExampleLinearNoop(t *testing.T) {
-	t.Parallel()
-
 	def, err := workflowdef.BuiltIn("linear-noop")
 	if err != nil {
 		t.Fatalf("BuiltIn returned error: %v", err)
@@ -29,16 +27,12 @@ func TestBuiltInExampleLinearNoop(t *testing.T) {
 }
 
 func TestRunRejectsUnknownCommand(t *testing.T) {
-	t.Parallel()
-
 	if err := run([]string{"bogus-command"}); err == nil {
 		t.Fatal("expected unknown command to be rejected")
 	}
 }
 
 func TestStartExampleProducesCompletedEventHistory(t *testing.T) {
-	t.Parallel()
-
 	dataDir := filepath.Join(t.TempDir(), "data")
 	out, err := stdoutString(func() error {
 		return run([]string{
@@ -77,5 +71,63 @@ func TestStartExampleProducesCompletedEventHistory(t *testing.T) {
 	}
 	if got := events[len(events)-1]["type"]; got != "WorkflowCompleted" {
 		t.Fatalf("expected last event WorkflowCompleted, got %v", got)
+	}
+}
+
+func TestStartLivingDagExampleProducesSpawnedExecution(t *testing.T) {
+	dataDir := filepath.Join(t.TempDir(), "data")
+	out, err := stdoutString(func() error {
+		return run([]string{
+			"start",
+			"-data-dir", dataDir,
+			"-workflow", filepath.Join("..", "..", "examples", "workflows", "living-dag.json"),
+			"-demo-worker",
+			"-wait-timeout", "2s",
+		})
+	})
+	if err != nil {
+		t.Fatalf("run living-dag example: %v", err)
+	}
+
+	runID := strings.TrimSpace(out)
+	if runID == "" {
+		t.Fatal("expected run id output")
+	}
+
+	statusJSON, err := stdoutString(func() error {
+		return run([]string{"status", "-data-dir", dataDir, "-run-id", runID})
+	})
+	if err != nil {
+		t.Fatalf("run status: %v", err)
+	}
+	var view struct {
+		State string                 `json:"state"`
+		Nodes map[string]interface{} `json:"nodes"`
+	}
+	if err := json.Unmarshal([]byte(statusJSON), &view); err != nil {
+		t.Fatalf("decode status json: %v", err)
+	}
+	if view.State != "COMPLETED" {
+		t.Fatalf("expected completed run, got %s", view.State)
+	}
+	for _, nodeID := range []string{"discover", "analyze-1", "analyze-2", "analyze-3"} {
+		if _, ok := view.Nodes[nodeID]; !ok {
+			t.Fatalf("expected node %s in final run view", nodeID)
+		}
+	}
+
+	content, err := stdoutString(func() error {
+		return run([]string{"events", "-data-dir", dataDir, "-run-id", runID})
+	})
+	if err != nil {
+		t.Fatalf("run events: %v", err)
+	}
+
+	var events []map[string]any
+	if err := json.Unmarshal([]byte(content), &events); err != nil {
+		t.Fatalf("decode events json: %v", err)
+	}
+	if len(events) < 11 {
+		t.Fatalf("expected living-dag example to produce expanded event history, got %d events", len(events))
 	}
 }

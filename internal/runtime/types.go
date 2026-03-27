@@ -130,10 +130,11 @@ type NodeStartedPayload struct {
 }
 
 type NodeCompletedPayload struct {
-	NodeID   string         `json:"node_id"`
-	WorkerID string         `json:"worker_id"`
-	Attempt  uint32         `json:"attempt"`
-	Output   map[string]any `json:"output,omitempty"`
+	NodeID       string           `json:"node_id"`
+	WorkerID     string           `json:"worker_id"`
+	Attempt      uint32           `json:"attempt"`
+	Output       map[string]any   `json:"output,omitempty"`
+	SpawnedNodes []NodeDefinition `json:"spawned_nodes,omitempty"`
 }
 
 type NodeFailedPayload struct {
@@ -181,11 +182,12 @@ type WorkerTask struct {
 }
 
 type CompleteTaskRequest struct {
-	WorkerID string         `json:"worker_id"`
-	RunID    string         `json:"run_id"`
-	NodeID   string         `json:"node_id"`
-	Attempt  uint32         `json:"attempt"`
-	Output   map[string]any `json:"output,omitempty"`
+	WorkerID     string           `json:"worker_id"`
+	RunID        string           `json:"run_id"`
+	NodeID       string           `json:"node_id"`
+	Attempt      uint32           `json:"attempt"`
+	Output       map[string]any   `json:"output,omitempty"`
+	SpawnedNodes []NodeDefinition `json:"spawned_nodes,omitempty"`
 }
 
 type FailTaskRequest struct {

@@ -1,0 +1,9 @@
+{
+  "name": "living-dag",
+  "nodes": [
+    {
+      "id": "discover",
+      "activity_type": "discover"
+    }
+  ]
+}

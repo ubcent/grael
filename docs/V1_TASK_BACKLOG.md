@@ -271,7 +271,7 @@ Implementation note:
 
 ### T17. Runtime spawn payload handling
 
-- `Status`: `todo`
+- `Status`: `done`
 - `Capability`: `C6`
 - `Goal`: Allow successful node completion to declare spawned nodes.
 - `Scope`:
@@ -284,7 +284,7 @@ Implementation note:
 
 ### T18. Dynamic graph scheduling and persisted rehydration
 
-- `Status`: `todo`
+- `Status`: `done`
 - `Capability`: `C6`
 - `Goal`: Make spawned nodes runnable and durable across restart.
 - `Scope`:
@@ -298,7 +298,7 @@ Implementation note:
 
 ### T19. Spawn validation and cycle rejection
 
-- `Status`: `todo`
+- `Status`: `done`
 - `Capability`: `C6`
 - `Goal`: Reject invalid graph mutations before they corrupt the run graph.
 - `Scope`:
@@ -517,7 +517,7 @@ Implementation note:
 
 ### T35. Composite demo workflow and end-to-end acceptance harness
 
-- `Status`: `todo`
+- `Status`: `in_progress`
 - `Capability`: `C11`
 - `Goal`: Compose core v1 behaviors into one demonstrable end-to-end workflow.
 - `Scope`:
@@ -529,6 +529,9 @@ Implementation note:
 - `Depends on`: `T18`, `T14`, `T26`, `T28`, `T30`, `T31`
 - `Definition of Done`:
   - [UAT-C11-01](docs/uat/UAT-C11-01-core-demo-e2e.md)
+- `Progress Note`:
+  - Sprint 3 stretch scaffolding is in place via a file-based `living-dag` example and CLI demo-worker path that exercises runtime spawn end-to-end.
+  - Full `T35` remains open until retry, checkpoint, restart-continuation, and final composite acceptance are composed into one coherent demo flow.
 
 ---
 
