@@ -1,7 +1,7 @@
 GOCACHE := $(CURDIR)/.gocache
 BINARY := bin/grael
 
-.PHONY: build test run clean example-start example-living-dag-start example-living-dag-ops-start example-status example-events example-snapshot
+.PHONY: build test run clean example-start example-living-dag-start example-living-dag-ops-start example-core-demo-start example-status example-events example-snapshot
 
 build:
 	mkdir -p bin
@@ -24,6 +24,9 @@ example-living-dag-start: build
 
 example-living-dag-ops-start: build
 	./$(BINARY) start -workflow examples/workflows/living-dag-ops.json -demo-worker
+
+example-core-demo-start: build
+	./$(BINARY) start -workflow examples/workflows/core-demo.json -demo-worker
 
 example-status: build
 	@echo "usage: make example-status RUN_ID=<run-id>"

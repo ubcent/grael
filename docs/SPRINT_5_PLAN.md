@@ -102,6 +102,16 @@ Sprint 5 is complete when all of the following are true:
   - [UAT-C10-02-go-sdk-worker-seam.md](docs/uat/UAT-C10-02-go-sdk-worker-seam.md)
   - [UAT-C11-01-core-demo-e2e.md](docs/uat/UAT-C11-01-core-demo-e2e.md)
 
+Current status:
+
+- `StartRun` now enforces the no-admission-queue contract through hard-capacity rejection
+- workflow definition hash is captured at run start and exposed through the run view
+- the normalized workflow definition contract is now exercised end-to-end through one authoring-contract run covering retry, checkpoint, deadline, and compensation metadata
+- the thin Go worker SDK seam now exists as a small `sdk` package over the public worker protocol
+- the flagship `core-demo` example and restart-capable harness now exercise dynamic spawn, retry, approval, restart continuation, and final successful completion through the normal worker surface
+- `T32`, `T33`, `T34`, and `T35` are implemented to the current v1 baseline
+- the committed Sprint 5 scope is now assembled end to end
+
 ---
 
 ## Stretch Goal

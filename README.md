@@ -36,6 +36,12 @@ Or exercise the Sprint 4 demo composition with spawn, approval, and compensation
 ./grael start -workflow examples/workflows/living-dag-ops.json -demo-worker
 ```
 
+Or run the flagship composed demo with spawn, retry, approval, and final completion:
+
+```bash
+./grael start -workflow examples/workflows/core-demo.json -demo-worker
+```
+
 `-demo-worker` starts a tiny in-process worker so the CLI exercises the same
 worker polling and completion surface as normal execution.
 

@@ -1,6 +1,9 @@
 package engine
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -23,6 +26,7 @@ var (
 	ErrLeaseExpired         = errors.New("engine: lease expired")
 	ErrCheckpointNotWaiting = errors.New("engine: checkpoint is not awaiting approval")
 	ErrRunCancelled         = errors.New("engine: run cancelled")
+	ErrCapacityExceeded     = errors.New("engine: hard capacity exceeded")
 )
 
 const (
@@ -32,35 +36,69 @@ const (
 )
 
 type Engine struct {
-	mu        sync.RWMutex
-	wal       *wal.Store
-	snapshots *snapshot.Store
-	workers   *worker.Registry
-	runs      map[string]*state.ExecutionState
+	mu            sync.RWMutex
+	wal           *wal.Store
+	snapshots     *snapshot.Store
+	workers       *worker.Registry
+	runs          map[string]*state.ExecutionState
+	maxActiveRuns int
+	stopCh        chan struct{}
+	stopOnce      sync.Once
+	wg            sync.WaitGroup
 }
 
 func New(baseDir string) *Engine {
+	return NewWithConfig(baseDir, Config{})
+}
+
+type Config struct {
+	MaxActiveRuns int
+}
+
+func NewWithConfig(baseDir string, cfg Config) *Engine {
 	e := &Engine{
-		wal:       wal.NewStore(baseDir),
-		snapshots: snapshot.NewStore(baseDir),
-		workers:   worker.NewRegistry(),
-		runs:      map[string]*state.ExecutionState{},
+		wal:           wal.NewStore(baseDir),
+		snapshots:     snapshot.NewStore(baseDir),
+		workers:       worker.NewRegistry(),
+		runs:          map[string]*state.ExecutionState{},
+		maxActiveRuns: cfg.MaxActiveRuns,
+		stopCh:        make(chan struct{}),
 	}
 	e.loadPersistedRuns()
+	e.wg.Add(2)
 	go e.runLeaseMonitor()
 	go e.runTimerMonitor()
 	return e
 }
 
+func (e *Engine) Close() {
+	e.stopOnce.Do(func() {
+		close(e.stopCh)
+	})
+	e.wg.Wait()
+}
+
 func (e *Engine) StartRun(def rt.WorkflowDefinition, input map[string]any) (string, error) {
+	e.mu.RLock()
+	if e.maxActiveRuns > 0 && countActiveRuns(e.runs) >= e.maxActiveRuns {
+		e.mu.RUnlock()
+		return "", ErrCapacityExceeded
+	}
+	e.mu.RUnlock()
+
 	runID := fmt.Sprintf("%s-%d", def.Name, time.Now().UTC().UnixNano())
+	definitionHash, err := workflowDefinitionHash(def)
+	if err != nil {
+		return "", err
+	}
 	event, err := e.wal.Append(rt.Event{
 		RunID:     runID,
 		Type:      rt.EventWorkflowStarted,
 		Timestamp: time.Now().UTC(),
 		Payload: rt.WorkflowStartedPayload{
-			Workflow: def,
-			Input:    input,
+			Workflow:       def,
+			DefinitionHash: definitionHash,
+			Input:          input,
 		},
 	})
 	if err != nil {
@@ -78,6 +116,30 @@ func (e *Engine) StartRun(def rt.WorkflowDefinition, input map[string]any) (stri
 
 	_ = e.snapshots.Save(st)
 	return runID, nil
+}
+
+func countActiveRuns(runs map[string]*state.ExecutionState) int {
+	count := 0
+	for _, st := range runs {
+		if st == nil || st.IsTerminal() {
+			continue
+		}
+		count++
+	}
+	return count
+}
+
+func workflowDefinitionHash(def rt.WorkflowDefinition) (string, error) {
+	normalized, err := workflowdef.Normalize(def)
+	if err != nil {
+		return "", err
+	}
+	payload, err := json.Marshal(normalized)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(payload)
+	return hex.EncodeToString(sum[:]), nil
 }
 
 func (e *Engine) reconcileRunLocked(st *state.ExecutionState) error {
@@ -620,7 +682,7 @@ func (e *Engine) advanceRunStateLocked(st *state.ExecutionState) error {
 		}
 		return st.Apply(event)
 	}
-	if anyNodeFailed(st) {
+	if hasUnrecoveredFailure(st) {
 		if hasCompensationWork(st) {
 			event, err := e.wal.Append(rt.Event{
 				RunID:     st.RunID,
@@ -698,13 +760,25 @@ func hasReadyNode(view rt.RunView) bool {
 	return false
 }
 
-func anyNodeFailed(st *state.ExecutionState) bool {
+func hasUnrecoveredFailure(st *state.ExecutionState) bool {
 	for _, node := range st.Nodes {
-		if node.State == rt.NodeStateFailed {
-			return true
+		if node.State != rt.NodeStateFailed {
+			continue
 		}
+		if hasPendingRetryTimer(st, node.ID, node.Attempt) {
+			continue
+		}
+		if nodeHasReadyRetry(st, node.ID) {
+			continue
+		}
+		return true
 	}
 	return false
+}
+
+func nodeHasReadyRetry(st *state.ExecutionState, nodeID string) bool {
+	node := st.Nodes[nodeID]
+	return node != nil && node.State == rt.NodeStateReady
 }
 
 func allNodesTerminal(st *state.ExecutionState) bool {
@@ -933,20 +1007,32 @@ func (e *Engine) rehydrate(runID string, events []rt.Event) (*state.ExecutionSta
 }
 
 func (e *Engine) runLeaseMonitor() {
+	defer e.wg.Done()
 	ticker := time.NewTicker(leaseMonitorInterval)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		e.expireOverdueLeases()
+	for {
+		select {
+		case <-ticker.C:
+			e.expireOverdueLeases()
+		case <-e.stopCh:
+			return
+		}
 	}
 }
 
 func (e *Engine) runTimerMonitor() {
+	defer e.wg.Done()
 	ticker := time.NewTicker(timerMonitorInterval)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		e.fireDueTimers()
+	for {
+		select {
+		case <-ticker.C:
+			e.fireDueTimers()
+		case <-e.stopCh:
+			return
+		}
 	}
 }
 

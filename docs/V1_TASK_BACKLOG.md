@@ -477,7 +477,7 @@ Implementation note:
 
 ### T32. Hard-capacity rejection on StartRun
 
-- `Status`: `todo`
+- `Status`: `done`
 - `Capability`: `C9`
 - `Goal`: Enforce the v1 rule that capacity exhaustion rejects immediately instead of queuing.
 - `Scope`:
@@ -490,7 +490,7 @@ Implementation note:
 
 ### T33. Minimal workflow definition contract and definition hash capture
 
-- `Status`: `todo`
+- `Status`: `done`
 - `Capability`: `C10`
 - `Goal`: Freeze the minimum authoring contract for nodes, dependencies, and node policies.
 - `Scope`:
@@ -504,7 +504,7 @@ Implementation note:
 
 ### T34. Thin Go worker SDK seam
 
-- `Status`: `todo`
+- `Status`: `done`
 - `Capability`: `C10`
 - `Goal`: Provide a minimal Go worker integration layer over the public worker protocol.
 - `Scope`:
@@ -517,7 +517,7 @@ Implementation note:
 
 ### T35. Composite demo workflow and end-to-end acceptance harness
 
-- `Status`: `in_progress`
+- `Status`: `done`
 - `Capability`: `C11`
 - `Goal`: Compose core v1 behaviors into one demonstrable end-to-end workflow.
 - `Scope`:
@@ -530,8 +530,8 @@ Implementation note:
 - `Definition of Done`:
   - [UAT-C11-01](docs/uat/UAT-C11-01-core-demo-e2e.md)
 - `Progress Note`:
-  - Sprint 3 stretch scaffolding is in place via a file-based `living-dag` example and CLI demo-worker path that exercises runtime spawn end-to-end.
-  - Full `T35` remains open until retry, checkpoint, restart-continuation, and final composite acceptance are composed into one coherent demo flow.
+  - The flagship `core-demo` workflow now composes runtime spawn, retryable failure, checkpoint approval, restart continuation, and final successful completion through the normal worker surface.
+  - The CLI demo-worker path and restart-capable test harness both exercise the same persisted execution core without special-case runtime shortcuts.
 
 ---
 

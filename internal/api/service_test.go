@@ -73,6 +73,80 @@ func TestWorkerPollCompleteFinishesRun(t *testing.T) {
 	})
 }
 
+func TestStartRunRejectsImmediatelyAtHardCapacity(t *testing.T) {
+	t.Parallel()
+
+	svc := api.NewWithConfig(t.TempDir(), engine.Config{MaxActiveRuns: 1})
+
+	def := rt.WorkflowDefinition{
+		Name: "capacity-test",
+		Nodes: []rt.NodeDefinition{
+			{ID: "A", ActivityType: "hold"},
+		},
+	}
+	runID, err := svc.StartRun(def, nil)
+	if err != nil {
+		t.Fatalf("start first run: %v", err)
+	}
+	if runID == "" {
+		t.Fatal("expected first run id")
+	}
+
+	secondRunID, err := svc.StartRun(def, nil)
+	if !errors.Is(err, engine.ErrCapacityExceeded) {
+		t.Fatalf("expected capacity exceeded error, got run_id=%q err=%v", secondRunID, err)
+	}
+	if secondRunID != "" {
+		t.Fatalf("expected rejected run to have no id, got %q", secondRunID)
+	}
+}
+
+func TestStartRunCapturesDefinitionHashInRunView(t *testing.T) {
+	t.Parallel()
+
+	svc := api.New(t.TempDir())
+	runID, err := svc.StartRun(rt.WorkflowDefinition{
+		Name: "definition-hash",
+		Nodes: []rt.NodeDefinition{
+			{
+				ID:                   "A",
+				ActivityType:         "step",
+				RetryPolicy:          &rt.RetryPolicy{MaxAttempts: 2, Backoff: 50 * time.Millisecond},
+				CheckpointTimeout:    100 * time.Millisecond,
+				ExecutionDeadline:    150 * time.Millisecond,
+				AbsoluteDeadline:     250 * time.Millisecond,
+				CompensationActivity: "undo",
+			},
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("start run: %v", err)
+	}
+
+	view, err := svc.GetRun(runID)
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	if view.DefinitionHash == "" {
+		t.Fatal("expected definition hash in run view")
+	}
+
+	events, err := svc.ListEvents(runID)
+	if err != nil {
+		t.Fatalf("list events: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("expected only workflow started event, got %d", len(events))
+	}
+	started := events[0].Payload.(rt.WorkflowStartedPayload)
+	if started.DefinitionHash == "" {
+		t.Fatal("expected definition hash in workflow started payload")
+	}
+	if started.DefinitionHash != view.DefinitionHash {
+		t.Fatalf("expected matching definition hash between event and view, got %q vs %q", started.DefinitionHash, view.DefinitionHash)
+	}
+}
+
 func TestLinearWorkflowRespectsDependenciesThroughWorkerSurface(t *testing.T) {
 	t.Parallel()
 
@@ -1991,6 +2065,185 @@ func TestSpawnedNodeMetadataIsNormalizedBeforePersistence(t *testing.T) {
 		return
 	}
 	t.Fatal("expected completion event with normalized spawned node metadata")
+}
+
+func TestDefinitionMetadataExecutesAsDeclaredAcrossRetryCheckpointDeadlineAndCompensation(t *testing.T) {
+	t.Parallel()
+
+	svc := api.New(t.TempDir())
+	if err := svc.RegisterWorker("worker-1", []rt.ActivityType{"step", "gate", "slow", "undo"}); err != nil {
+		t.Fatalf("register worker: %v", err)
+	}
+
+	runID, err := svc.StartRun(rt.WorkflowDefinition{
+		Name: "definition-metadata-contract",
+		Nodes: []rt.NodeDefinition{
+			{
+				ID:           "retry-step",
+				ActivityType: "step",
+				RetryPolicy: &rt.RetryPolicy{
+					MaxAttempts: 2,
+					Backoff:     50 * time.Millisecond,
+				},
+				CompensationActivity: "undo",
+			},
+			{
+				ID:                   "approval-step",
+				ActivityType:         "gate",
+				DependsOn:            []string{"retry-step"},
+				CheckpointTimeout:    time.Second,
+				CompensationActivity: "undo",
+			},
+			{
+				ID:                "deadline-step",
+				ActivityType:      "slow",
+				DependsOn:         []string{"approval-step"},
+				ExecutionDeadline: 80 * time.Millisecond,
+			},
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("start run: %v", err)
+	}
+
+	task, ok, err := svc.PollTask("worker-1", 250*time.Millisecond)
+	if err != nil {
+		t.Fatalf("poll retry-step attempt 1: %v", err)
+	}
+	if !ok || task.NodeID != "retry-step" || task.Attempt != 1 {
+		t.Fatalf("expected retry-step attempt 1, got %+v ok=%v", task, ok)
+	}
+	if err := svc.FailTask(rt.FailTaskRequest{
+		WorkerID:  "worker-1",
+		RunID:     runID,
+		NodeID:    task.NodeID,
+		Attempt:   task.Attempt,
+		Message:   "retry me",
+		Retryable: true,
+	}); err != nil {
+		t.Fatalf("fail retry-step attempt 1: %v", err)
+	}
+
+	task, ok, err = svc.PollTask("worker-1", 500*time.Millisecond)
+	if err != nil {
+		t.Fatalf("poll retry-step attempt 2: %v", err)
+	}
+	if !ok || task.NodeID != "retry-step" || task.Attempt != 2 {
+		t.Fatalf("expected retry-step attempt 2, got %+v ok=%v", task, ok)
+	}
+	if err := svc.CompleteTask(rt.CompleteTaskRequest{
+		WorkerID: "worker-1",
+		RunID:    runID,
+		NodeID:   task.NodeID,
+		Attempt:  task.Attempt,
+		Output:   map[string]any{"result": "recovered"},
+	}); err != nil {
+		t.Fatalf("complete retry-step attempt 2: %v", err)
+	}
+
+	task, ok, err = svc.PollTask("worker-1", 250*time.Millisecond)
+	if err != nil {
+		t.Fatalf("poll approval-step attempt 1: %v", err)
+	}
+	if !ok || task.NodeID != "approval-step" {
+		t.Fatalf("expected approval-step, got %+v ok=%v", task, ok)
+	}
+	if err := svc.CompleteTask(rt.CompleteTaskRequest{
+		WorkerID: "worker-1",
+		RunID:    runID,
+		NodeID:   task.NodeID,
+		Attempt:  task.Attempt,
+		Checkpoint: &rt.CheckpointRequest{
+			Reason: "await metadata approval",
+		},
+	}); err != nil {
+		t.Fatalf("checkpoint approval-step: %v", err)
+	}
+	waitForNodeState(t, svc, runID, "approval-step", rt.NodeStateAwaitingApproval)
+
+	if err := svc.ApproveCheckpoint(runID, "approval-step"); err != nil {
+		t.Fatalf("approve checkpoint: %v", err)
+	}
+
+	task, ok, err = svc.PollTask("worker-1", 250*time.Millisecond)
+	if err != nil {
+		t.Fatalf("poll approval-step attempt 2: %v", err)
+	}
+	if !ok || task.NodeID != "approval-step" || task.Attempt != 2 {
+		t.Fatalf("expected approval-step attempt 2, got %+v ok=%v", task, ok)
+	}
+	if err := svc.CompleteTask(rt.CompleteTaskRequest{
+		WorkerID: "worker-1",
+		RunID:    runID,
+		NodeID:   task.NodeID,
+		Attempt:  task.Attempt,
+		Output:   map[string]any{"approved": true},
+	}); err != nil {
+		t.Fatalf("complete approval-step: %v", err)
+	}
+
+	task, ok, err = svc.PollTask("worker-1", 250*time.Millisecond)
+	if err != nil {
+		t.Fatalf("poll deadline-step: %v", err)
+	}
+	if !ok || task.NodeID != "deadline-step" {
+		t.Fatalf("expected deadline-step, got %+v ok=%v", task, ok)
+	}
+
+	waitForNodeState(t, svc, runID, "deadline-step", rt.NodeStateFailed)
+	waitForRunState(t, svc, runID, rt.RunStateCompensating)
+
+	for _, nodeID := range []string{"approval-step", "retry-step"} {
+		task, ok, err = svc.PollTask("worker-1", 250*time.Millisecond)
+		if err != nil {
+			t.Fatalf("poll compensation %s: %v", nodeID, err)
+		}
+		if !ok || task.NodeID != nodeID || !task.Compensation {
+			t.Fatalf("expected compensation task %s, got %+v ok=%v", nodeID, task, ok)
+		}
+		if err := svc.CompleteTask(rt.CompleteTaskRequest{
+			WorkerID:     "worker-1",
+			RunID:        runID,
+			NodeID:       task.NodeID,
+			Attempt:      task.Attempt,
+			Compensation: true,
+			Output:       map[string]any{"compensated": nodeID},
+		}); err != nil {
+			t.Fatalf("complete compensation %s: %v", nodeID, err)
+		}
+	}
+
+	waitForRunState(t, svc, runID, rt.RunStateCompensated)
+
+	view, err := svc.GetRun(runID)
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	if view.Nodes["retry-step"].State != rt.NodeStateCompleted {
+		t.Fatalf("expected retry-step to remain completed for auditability, got %s", view.Nodes["retry-step"].State)
+	}
+	if got := view.Nodes["deadline-step"].LastError; got != "execution deadline exceeded" {
+		t.Fatalf("expected deadline-step timeout error, got %q", got)
+	}
+
+	events, err := svc.ListEvents(runID)
+	if err != nil {
+		t.Fatalf("list events: %v", err)
+	}
+	assertEventTypesPresentInOrder(t, events, []rt.EventType{
+		rt.EventNodeFailed,
+		rt.EventTimerScheduled,
+		rt.EventTimerFired,
+		rt.EventCheckpointReached,
+		rt.EventCheckpointApproved,
+		rt.EventNodeFailed,
+		rt.EventCompensationStarted,
+		rt.EventCompensationTaskStarted,
+		rt.EventCompensationTaskCompleted,
+		rt.EventCompensationTaskStarted,
+		rt.EventCompensationTaskCompleted,
+		rt.EventCompensationCompleted,
+	})
 }
 
 func assertEventSequence(t *testing.T, events []rt.Event, want []rt.EventType) {

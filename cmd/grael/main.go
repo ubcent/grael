@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -183,6 +184,47 @@ Built-in examples:
 }
 
 func startDemoWorker(svc *api.Service, runID string, def rt.WorkflowDefinition) error {
+	return startDemoWorkerWithContext(context.Background(), svc, runID, def)
+}
+
+func startDemoWorkerWithContext(ctx context.Context, svc *api.Service, runID string, def rt.WorkflowDefinition) error {
+	activities := demoWorkerActivities(def)
+	const workerID = "demo-worker"
+	if err := svc.RegisterWorker(workerID, activities); err != nil {
+		return err
+	}
+
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+			task, ok, err := svc.PollTask(workerID, 50*time.Millisecond)
+			if err != nil {
+				return
+			}
+			if !ok {
+				if err := maybeApproveDemoCheckpoint(svc, runID, def); err != nil {
+					return
+				}
+				view, err := svc.GetRun(runID)
+				if err == nil && isTerminalRunState(view.State) {
+					return
+				}
+				continue
+			}
+			if err := handleDemoTask(svc, runID, def, workerID, task); err != nil {
+				return
+			}
+		}
+	}()
+
+	return nil
+}
+
+func demoWorkerActivities(def rt.WorkflowDefinition) []rt.ActivityType {
 	activities := make([]rt.ActivityType, 0, len(def.Nodes))
 	seen := map[rt.ActivityType]struct{}{}
 	for _, node := range def.Nodes {
@@ -193,11 +235,7 @@ func startDemoWorker(svc *api.Service, runID string, def rt.WorkflowDefinition) 
 		activities = append(activities, node.ActivityType)
 	}
 	if _, ok := seen[rt.ActivityType("discover")]; ok {
-		if _, exists := seen[rt.ActivityType("analyze")]; !exists {
-			seen[rt.ActivityType("analyze")] = struct{}{}
-			activities = append(activities, rt.ActivityType("analyze"))
-		}
-		for _, extra := range []rt.ActivityType{"review", "finalize", "undo"} {
+		for _, extra := range []rt.ActivityType{"analyze", "review", "finalize", "summarize", "undo"} {
 			if _, exists := seen[extra]; exists {
 				continue
 			}
@@ -206,83 +244,115 @@ func startDemoWorker(svc *api.Service, runID string, def rt.WorkflowDefinition) 
 		}
 	}
 	slices.Sort(activities)
+	return activities
+}
 
-	const workerID = "demo-worker"
-	if err := svc.RegisterWorker(workerID, activities); err != nil {
+func handleDemoTask(svc *api.Service, runID string, def rt.WorkflowDefinition, workerID string, task rt.WorkerTask) error {
+	req := rt.CompleteTaskRequest{
+		WorkerID:     workerID,
+		RunID:        task.RunID,
+		NodeID:       task.NodeID,
+		Attempt:      task.Attempt,
+		Compensation: task.Compensation,
+		Output: map[string]any{
+			"status": "ok",
+		},
+	}
+	switch {
+	case task.Compensation:
+		req.Output["compensated"] = true
+	case task.ActivityType == "discover" && def.Name == "living-dag":
+		req.SpawnedNodes = []rt.NodeDefinition{
+			{ID: "analyze-1", ActivityType: "analyze"},
+			{ID: "analyze-2", ActivityType: "analyze"},
+			{ID: "analyze-3", ActivityType: "analyze"},
+		}
+		req.Output["discovered"] = 3
+	case task.ActivityType == "discover" && def.Name == "living-dag-ops":
+		req.SpawnedNodes = []rt.NodeDefinition{
+			{ID: "analyze-1", ActivityType: "analyze", CompensationActivity: "undo"},
+			{ID: "review", ActivityType: "review", CompensationActivity: "undo"},
+			{ID: "finalize", ActivityType: "finalize", DependsOn: []string{"analyze-1", "review"}},
+		}
+		req.Output["discovered"] = 3
+	case task.ActivityType == "discover" && def.Name == "core-demo":
+		req.SpawnedNodes = []rt.NodeDefinition{
+			{
+				ID:           "analyze-1",
+				ActivityType: "analyze",
+				RetryPolicy: &rt.RetryPolicy{
+					MaxAttempts: 2,
+					Backoff:     50 * time.Millisecond,
+				},
+			},
+			{ID: "analyze-2", ActivityType: "analyze"},
+			{ID: "review", ActivityType: "review", CheckpointTimeout: time.Second},
+			{ID: "summary", ActivityType: "summarize", DependsOn: []string{"analyze-1", "analyze-2", "review"}},
+		}
+		req.Output["discovered"] = 4
+	case def.Name == "core-demo" && task.NodeID == "analyze-1" && task.Attempt == 1:
+		return svc.FailTask(rt.FailTaskRequest{
+			WorkerID:  workerID,
+			RunID:     task.RunID,
+			NodeID:    task.NodeID,
+			Attempt:   task.Attempt,
+			Message:   "demo retryable analysis failure",
+			Retryable: true,
+		})
+	case task.ActivityType == "review":
+		reached, err := hasCheckpointReached(svc, runID, task.NodeID)
+		if err != nil {
+			return err
+		}
+		if !reached {
+			req.Checkpoint = &rt.CheckpointRequest{Reason: "human review"}
+		}
+	case task.ActivityType == "finalize":
+		return svc.FailTask(rt.FailTaskRequest{
+			WorkerID: workerID,
+			RunID:    task.RunID,
+			NodeID:   task.NodeID,
+			Attempt:  task.Attempt,
+			Message:  "demo finalize failure",
+		})
+	}
+	return svc.CompleteTask(req)
+}
+
+func maybeApproveDemoCheckpoint(svc *api.Service, runID string, def rt.WorkflowDefinition) error {
+	if def.Name != "living-dag-ops" && def.Name != "core-demo" {
+		return nil
+	}
+	view, err := svc.GetRun(runID)
+	if err != nil {
 		return err
 	}
+	reviewNode, ok := view.Nodes["review"]
+	if !ok || reviewNode.State != rt.NodeStateAwaitingApproval {
+		return nil
+	}
+	analyzeNode, analyzeOK := view.Nodes["analyze-1"]
+	if !analyzeOK || analyzeNode.State != rt.NodeStateCompleted {
+		return nil
+	}
+	return svc.ApproveCheckpoint(runID, "review")
+}
 
-	go func() {
-		idleRounds := 0
-		reviewCheckpointed := false
-		reviewApproved := false
-		for idleRounds < 5 {
-			task, ok, err := svc.PollTask(workerID, 50*time.Millisecond)
-			if err != nil {
-				return
-			}
-			if !ok {
-				if !reviewApproved {
-					view, err := svc.GetRun(runID)
-					if err == nil {
-						reviewNode, ok := view.Nodes["review"]
-						if ok && reviewNode.State == rt.NodeStateAwaitingApproval {
-							if analyzeNode, analyzeOK := view.Nodes["analyze-1"]; analyzeOK && analyzeNode.State == rt.NodeStateCompleted {
-								_ = svc.ApproveCheckpoint(runID, "review")
-								reviewApproved = true
-							}
-						}
-					}
-				}
-				idleRounds++
-				continue
-			}
-			idleRounds = 0
-			req := rt.CompleteTaskRequest{
-				WorkerID:     workerID,
-				RunID:        task.RunID,
-				NodeID:       task.NodeID,
-				Attempt:      task.Attempt,
-				Compensation: task.Compensation,
-				Output: map[string]any{
-					"status": "ok",
-				},
-			}
-			switch {
-			case task.Compensation:
-				req.Output["compensated"] = true
-			case task.ActivityType == "discover" && def.Name == "living-dag":
-				req.SpawnedNodes = []rt.NodeDefinition{
-					{ID: "analyze-1", ActivityType: "analyze"},
-					{ID: "analyze-2", ActivityType: "analyze"},
-					{ID: "analyze-3", ActivityType: "analyze"},
-				}
-				req.Output["discovered"] = 3
-			case task.ActivityType == "discover" && def.Name == "living-dag-ops":
-				req.SpawnedNodes = []rt.NodeDefinition{
-					{ID: "analyze-1", ActivityType: "analyze", CompensationActivity: "undo"},
-					{ID: "review", ActivityType: "review", CompensationActivity: "undo"},
-					{ID: "finalize", ActivityType: "finalize", DependsOn: []string{"analyze-1", "review"}},
-				}
-				req.Output["discovered"] = 3
-			case task.ActivityType == "review" && !reviewCheckpointed:
-				reviewCheckpointed = true
-				req.Checkpoint = &rt.CheckpointRequest{Reason: "human review"}
-			case task.ActivityType == "finalize":
-				_ = svc.FailTask(rt.FailTaskRequest{
-					WorkerID: workerID,
-					RunID:    task.RunID,
-					NodeID:   task.NodeID,
-					Attempt:  task.Attempt,
-					Message:  "demo finalize failure",
-				})
-				continue
-			}
-			_ = svc.CompleteTask(req)
+func hasCheckpointReached(svc *api.Service, runID, nodeID string) (bool, error) {
+	events, err := svc.ListEvents(runID)
+	if err != nil {
+		return false, err
+	}
+	for _, event := range events {
+		if event.Type != rt.EventCheckpointReached {
+			continue
 		}
-	}()
-
-	return nil
+		payload, ok := event.Payload.(rt.CheckpointReachedPayload)
+		if ok && payload.NodeID == nodeID {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func waitForTerminalRun(svc *api.Service, runID string, timeout time.Duration) error {

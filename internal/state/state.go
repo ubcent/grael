@@ -11,6 +11,7 @@ import (
 type ExecutionState struct {
 	RunID              string
 	Workflow           string
+	DefinitionHash     string
 	Input              map[string]any
 	RunState           rt.RunState
 	CancelRequested    bool
@@ -90,6 +91,7 @@ func (s *ExecutionState) Apply(event rt.Event) error {
 		payload := event.Payload.(rt.WorkflowStartedPayload)
 		s.RunID = event.RunID
 		s.Workflow = payload.Workflow.Name
+		s.DefinitionHash = payload.DefinitionHash
 		s.Input = payload.Input
 		s.RunState = rt.RunStateRunning
 		s.CreatedAt = event.Timestamp
@@ -365,12 +367,13 @@ func (s *ExecutionState) View() rt.RunView {
 		}
 	}
 	return rt.RunView{
-		RunID:      s.RunID,
-		Workflow:   s.Workflow,
-		State:      s.RunState,
-		LastSeq:    s.LastSeq,
-		Nodes:      nodes,
-		CreatedAt:  s.CreatedAt,
-		FinishedAt: s.FinishedAt,
+		RunID:          s.RunID,
+		Workflow:       s.Workflow,
+		DefinitionHash: s.DefinitionHash,
+		State:          s.RunState,
+		LastSeq:        s.LastSeq,
+		Nodes:          nodes,
+		CreatedAt:      s.CreatedAt,
+		FinishedAt:     s.FinishedAt,
 	}
 }

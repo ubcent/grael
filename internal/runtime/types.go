@@ -90,8 +90,9 @@ type Event struct {
 }
 
 type WorkflowStartedPayload struct {
-	Workflow WorkflowDefinition `json:"workflow"`
-	Input    map[string]any     `json:"input,omitempty"`
+	Workflow       WorkflowDefinition `json:"workflow"`
+	DefinitionHash string             `json:"definition_hash,omitempty"`
+	Input          map[string]any     `json:"input,omitempty"`
 }
 
 type LeaseGrantedPayload struct {
@@ -227,13 +228,14 @@ type WorkflowFailedPayload struct {
 }
 
 type RunView struct {
-	RunID      string              `json:"run_id"`
-	Workflow   string              `json:"workflow"`
-	State      RunState            `json:"state"`
-	LastSeq    uint64              `json:"last_seq"`
-	Nodes      map[string]NodeView `json:"nodes"`
-	CreatedAt  time.Time           `json:"created_at"`
-	FinishedAt *time.Time          `json:"finished_at,omitempty"`
+	RunID          string              `json:"run_id"`
+	Workflow       string              `json:"workflow"`
+	DefinitionHash string              `json:"definition_hash,omitempty"`
+	State          RunState            `json:"state"`
+	LastSeq        uint64              `json:"last_seq"`
+	Nodes          map[string]NodeView `json:"nodes"`
+	CreatedAt      time.Time           `json:"created_at"`
+	FinishedAt     *time.Time          `json:"finished_at,omitempty"`
 }
 
 type NodeView struct {

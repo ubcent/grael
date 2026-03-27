@@ -16,6 +16,17 @@ func New(baseDir string) *Service {
 	return &Service{engine: engine.New(baseDir)}
 }
 
+func NewWithConfig(baseDir string, cfg engine.Config) *Service {
+	return &Service{engine: engine.NewWithConfig(baseDir, cfg)}
+}
+
+func (s *Service) Close() {
+	if s == nil || s.engine == nil {
+		return
+	}
+	s.engine.Close()
+}
+
 func (s *Service) StartRun(def rt.WorkflowDefinition, input map[string]any) (string, error) {
 	return s.engine.StartRun(def, input)
 }
