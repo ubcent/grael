@@ -71,6 +71,8 @@ The backlog remains the canonical spec-driven task definition. This file adds de
 | `T43` | `C4` | `P1` | `M` | `High` |  | Long-poll, heartbeat, and error mapping create transport-sensitive correctness risk |
 | `T44` | `C9` | `P1` | `M` | `High` |  | Live subscriptions are easy to get subtly wrong if they bypass committed order |
 | `T45` | `C11` | `P1` | `S` | `Medium` |  | The serve path is only valuable if the integration proof is real and runnable |
+| `T46` | `C10` | `P1` | `M` | `High` |  | Node input must stay explicit and durable rather than becoming an implicit side channel |
+| `T47` | `C10` | `P2` | `S` | `Medium` |  | SDK fan-out convenience is only safe if it lowers cleanly to ordinary spawn semantics |
 
 ---
 
@@ -124,10 +126,15 @@ These tasks establish:
 - committed live event streaming
 - runnable local server entrypoint
 
+### Bucket E: Authoring Contract Completion
+
+- `T46`
+- `T47`
+
 These tasks establish:
 
-- thin SDK seam
-- flagship demo path
+- explicit node-scoped input delivery
+- fan-out authoring convenience without a second runtime model
 
 ---
 

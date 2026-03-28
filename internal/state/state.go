@@ -2,6 +2,7 @@ package state
 
 import (
 	"fmt"
+	"maps"
 	"slices"
 	"time"
 
@@ -27,6 +28,7 @@ type ExecutionState struct {
 type Node struct {
 	ID                   string
 	ActivityType         rt.ActivityType
+	Input                map[string]any
 	DependsOn            []string
 	RetryPolicy          *rt.RetryPolicy
 	CompensationActivity rt.ActivityType
@@ -92,13 +94,14 @@ func (s *ExecutionState) Apply(event rt.Event) error {
 		s.RunID = event.RunID
 		s.Workflow = payload.Workflow.Name
 		s.DefinitionHash = payload.DefinitionHash
-		s.Input = payload.Input
+		s.Input = maps.Clone(payload.Input)
 		s.RunState = rt.RunStateRunning
 		s.CreatedAt = event.Timestamp
 		for _, def := range payload.Workflow.Nodes {
 			s.Nodes[def.ID] = &Node{
 				ID:                   def.ID,
 				ActivityType:         def.ActivityType,
+				Input:                maps.Clone(def.Input),
 				DependsOn:            slices.Clone(def.DependsOn),
 				RetryPolicy:          def.RetryPolicy,
 				CompensationActivity: def.CompensationActivity,
@@ -291,6 +294,7 @@ func (s *ExecutionState) Apply(event rt.Event) error {
 			s.Nodes[def.ID] = &Node{
 				ID:                   def.ID,
 				ActivityType:         def.ActivityType,
+				Input:                maps.Clone(def.Input),
 				DependsOn:            slices.Clone(def.DependsOn),
 				RetryPolicy:          def.RetryPolicy,
 				CompensationActivity: def.CompensationActivity,

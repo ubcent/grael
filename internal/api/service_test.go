@@ -73,6 +73,92 @@ func TestWorkerPollCompleteFinishesRun(t *testing.T) {
 	})
 }
 
+func TestNodeInputReachesWorkerAcrossSpawnAndRestart(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	svc := api.New(dir)
+	if err := svc.RegisterWorker("worker-1", []rt.ActivityType{"seed", "spawned"}); err != nil {
+		t.Fatalf("register worker: %v", err)
+	}
+
+	_, err := svc.StartRun(rt.WorkflowDefinition{
+		Name: "node-input-run",
+		Nodes: []rt.NodeDefinition{
+			{
+				ID:           "seed",
+				ActivityType: "seed",
+				Input:        map[string]any{"question": "What changed this morning?"},
+			},
+		},
+	}, map[string]any{"brief": "morning incident"})
+	if err != nil {
+		t.Fatalf("start run: %v", err)
+	}
+
+	task, ok, err := svc.PollTask("worker-1", 250*time.Millisecond)
+	if err != nil {
+		t.Fatalf("poll seed task: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected seed task")
+	}
+	if got := task.WorkflowInput["brief"]; got != "morning incident" {
+		t.Fatalf("expected workflow input, got %v", task.WorkflowInput)
+	}
+	if got := task.NodeInput["question"]; got != "What changed this morning?" {
+		t.Fatalf("expected node input on seed task, got %v", task.NodeInput)
+	}
+
+	if err := svc.CompleteTask(rt.CompleteTaskRequest{
+		WorkerID: "worker-1",
+		RunID:    task.RunID,
+		NodeID:   task.NodeID,
+		Attempt:  task.Attempt,
+		SpawnedNodes: []rt.NodeDefinition{
+			{
+				ID:           "spec-writer",
+				ActivityType: "spawned",
+				Input: map[string]any{
+					"question": "Write the spec update",
+					"context":  "checkout latency and auth dip",
+				},
+			},
+		},
+		Output: map[string]any{"status": "spawned"},
+	}); err != nil {
+		t.Fatalf("complete seed task: %v", err)
+	}
+
+	svc.Close()
+	svc = api.New(dir)
+	defer svc.Close()
+
+	if err := svc.RegisterWorker("worker-1", []rt.ActivityType{"seed", "spawned"}); err != nil {
+		t.Fatalf("register worker after restart: %v", err)
+	}
+
+	spawnedTask, ok, err := svc.PollTask("worker-1", 250*time.Millisecond)
+	if err != nil {
+		t.Fatalf("poll spawned task: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected spawned task after restart")
+	}
+	if spawnedTask.NodeID != "spec-writer" {
+		t.Fatalf("expected spawned node spec-writer, got %s", spawnedTask.NodeID)
+	}
+	if got := spawnedTask.NodeInput["question"]; got != "Write the spec update" {
+		t.Fatalf("expected spawned question input, got %v", spawnedTask.NodeInput)
+	}
+	if got := spawnedTask.NodeInput["context"]; got != "checkout latency and auth dip" {
+		t.Fatalf("expected spawned context input, got %v", spawnedTask.NodeInput)
+	}
+	if got := spawnedTask.WorkflowInput["brief"]; got != "morning incident" {
+		t.Fatalf("expected workflow input to survive restart, got %v", spawnedTask.WorkflowInput)
+	}
+}
+
 func TestStartRunRejectsImmediatelyAtHardCapacity(t *testing.T) {
 	t.Parallel()
 

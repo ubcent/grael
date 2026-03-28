@@ -21,6 +21,7 @@ This file tracks Architecture Decision Records for Grael.
 | `0011` | [Compensation Applies Only To Completed Nodes](./0011-compensation-applies-only-to-completed-nodes.md) | `Accepted` | Keeps unwind semantics conservative and trustworthy |
 | `0012` | [Visual Demo Must Be A Read-Only Event-Derived Surface](./0012-visual-demo-must-be-a-read-only-event-derived-surface.md) | `Accepted` | Keeps the post-v1 demo layer honest and non-authoritative |
 | `0013` | [gRPC Transport Must Remain A Thin Layer Over `api.Service`](./0013-grpc-transport-must-remain-a-thin-layer-over-api-service.md) | `Accepted` | Freezes the network transport boundary for the v1 service surface |
+| `0014` | [Node Input And SDK Fan-Out Must Remain Explicit Living-DAG Surfaces](./0014-node-input-and-sdk-fanout-must-remain-explicit-living-dag-surfaces.md) | `Accepted` | Closes authoring gaps without adding a second runtime model |
 
 ---
 

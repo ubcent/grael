@@ -141,3 +141,14 @@ At the midpoint and end of the sprint, the team should ask:
 2. Does `StreamEvents` only emit committed events in committed order?
 3. Would remote workers observe the same lease and stale-result semantics as local callers?
 4. Are we still building a transport layer, not a second runtime or control plane?
+
+---
+
+## Follow-Up Boundary
+
+Sprint 7 intentionally does not solve authoring-contract gaps such as:
+
+- per-node input delivery
+- SDK fan-out convenience over spawned nodes
+
+Those belong to the bounded v1 follow-up captured in [SPRINT_7_1_PLAN.md](docs/SPRINT_7_1_PLAN.md), not to the transport slice itself.

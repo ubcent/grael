@@ -29,7 +29,11 @@ func TestGraelServerSupportsWorkerLifecycleAndEventStreaming(t *testing.T) {
 		Workflow: &pb.WorkflowDefinition{
 			Name: "grpc-demo",
 			Nodes: []*pb.NodeDefinition{
-				{Id: "collect", ActivityType: string(rt.ActivityTypeNoop)},
+				{
+					Id:           "collect",
+					ActivityType: string(rt.ActivityTypeNoop),
+					Input:        mustStruct(t, map[string]any{"question": "What is the customer impact?"}),
+				},
 			},
 		},
 		Input: mustStruct(t, map[string]any{"brief": "morning incident"}),
@@ -83,6 +87,12 @@ func TestGraelServerSupportsWorkerLifecycleAndEventStreaming(t *testing.T) {
 	}
 	if pollResp.GetTask().GetRunId() != runID {
 		t.Fatalf("expected task run %s, got %s", runID, pollResp.GetTask().GetRunId())
+	}
+	if got := pollResp.GetTask().GetWorkflowInput().AsMap()["brief"]; got != "morning incident" {
+		t.Fatalf("expected workflow input over grpc, got %v", pollResp.GetTask().GetWorkflowInput().AsMap())
+	}
+	if got := pollResp.GetTask().GetNodeInput().AsMap()["question"]; got != "What is the customer impact?" {
+		t.Fatalf("expected node input over grpc, got %v", pollResp.GetTask().GetNodeInput().AsMap())
 	}
 
 	if _, err := client.CompleteTask(ctx, &pb.CompleteTaskRequest{

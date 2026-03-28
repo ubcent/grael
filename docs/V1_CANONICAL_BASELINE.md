@@ -127,8 +127,15 @@ The following capabilities define the actual Grael v1 implementation surface:
 ### Dynamic Orchestration
 
 - runtime node spawn
+- node-scoped input payloads on declared and spawned nodes
 - dependency resolution
 - cycle rejection
+
+### Authoring And SDK Surface
+
+- workflow-level input at `StartRun`
+- per-node input delivered to workers with the claimed task
+- SDK fan-out helper that lowers to normal spawned-node completion semantics
 
 ### Control Flow
 

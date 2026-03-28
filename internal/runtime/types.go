@@ -71,14 +71,15 @@ type RetryPolicy struct {
 }
 
 type NodeDefinition struct {
-	ID                   string        `json:"id"`
-	ActivityType         ActivityType  `json:"activity_type"`
-	DependsOn            []string      `json:"depends_on,omitempty"`
-	RetryPolicy          *RetryPolicy  `json:"retry_policy,omitempty"`
-	CompensationActivity ActivityType  `json:"compensation_activity,omitempty"`
-	CheckpointTimeout    time.Duration `json:"checkpoint_timeout,omitempty"`
-	ExecutionDeadline    time.Duration `json:"execution_deadline,omitempty"`
-	AbsoluteDeadline     time.Duration `json:"absolute_deadline,omitempty"`
+	ID                   string         `json:"id"`
+	ActivityType         ActivityType   `json:"activity_type"`
+	Input                map[string]any `json:"input,omitempty"`
+	DependsOn            []string       `json:"depends_on,omitempty"`
+	RetryPolicy          *RetryPolicy   `json:"retry_policy,omitempty"`
+	CompensationActivity ActivityType   `json:"compensation_activity,omitempty"`
+	CheckpointTimeout    time.Duration  `json:"checkpoint_timeout,omitempty"`
+	ExecutionDeadline    time.Duration  `json:"execution_deadline,omitempty"`
+	AbsoluteDeadline     time.Duration  `json:"absolute_deadline,omitempty"`
 }
 
 type Event struct {
@@ -256,6 +257,7 @@ type WorkerTask struct {
 	Compensation  bool           `json:"compensation,omitempty"`
 	Workflow      string         `json:"workflow"`
 	WorkflowInput map[string]any `json:"workflow_input,omitempty"`
+	NodeInput     map[string]any `json:"node_input,omitempty"`
 }
 
 type CompleteTaskRequest struct {

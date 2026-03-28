@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"slices"
 	"sync"
@@ -663,7 +664,8 @@ func (e *Engine) claimReadyTaskLocked(st *state.ExecutionState, workerID string)
 			ActivityType:  node.ActivityType,
 			Attempt:       attempt,
 			Workflow:      st.Workflow,
-			WorkflowInput: st.Input,
+			WorkflowInput: maps.Clone(st.Input),
+			NodeInput:     maps.Clone(node.Input),
 		}, true, nil
 	}
 
@@ -914,6 +916,11 @@ func (e *Engine) claimCompensationTaskLocked(st *state.ExecutionState, workerID 
 		return rt.WorkerTask{}, false, err
 	}
 
+	var nodeInput map[string]any
+	if node := st.Nodes[entry.NodeID]; node != nil {
+		nodeInput = maps.Clone(node.Input)
+	}
+
 	return rt.WorkerTask{
 		RunID:         st.RunID,
 		NodeID:        entry.NodeID,
@@ -921,7 +928,8 @@ func (e *Engine) claimCompensationTaskLocked(st *state.ExecutionState, workerID 
 		Attempt:       attempt,
 		Compensation:  true,
 		Workflow:      st.Workflow,
-		WorkflowInput: st.Input,
+		WorkflowInput: maps.Clone(st.Input),
+		NodeInput:     nodeInput,
 	}, true, nil
 }
 

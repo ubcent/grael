@@ -616,6 +616,39 @@ Implementation note:
 
 ---
 
+## Wave 7: Authoring Contract Completion
+
+### T46. Node-scoped input in workflow definitions and worker tasks
+
+- `Status`: `todo`
+- `Capability`: `C10`
+- `Goal`: Let static and spawned nodes carry explicit per-node input so workers can receive durable node-specific context without inventing a side channel.
+- `Scope`:
+  - add `input` to `NodeDefinition`
+  - include node-scoped input in task delivery alongside workflow-level input
+  - ensure spawned nodes can carry their own input payloads
+  - preserve restart and replay semantics through persisted history only
+  - extend gRPC proto transport for the same contract
+- `Depends on`: `T33`, `T41`, `T42`, `T43`
+- `Definition of Done`:
+  - [UAT-C10-03](docs/uat/UAT-C10-03-node-input-reaches-worker.md)
+
+### T47. SDK fan-out helper that lowers to ordinary spawn semantics
+
+- `Status`: `todo`
+- `Capability`: `C10`
+- `Goal`: Add an SDK convenience for common fan-out authoring while keeping the runtime contract as plain living-DAG spawn.
+- `Scope`:
+  - SDK helper API for fan-out over a list of per-node inputs
+  - helper expansion into `spawned_nodes` only
+  - no new runtime event types or orchestration states
+  - documentation and tests proving helper output is equivalent to manual spawn
+- `Depends on`: `T34`, `T46`
+- `Definition of Done`:
+  - [UAT-C10-04](docs/uat/UAT-C10-04-sdk-fanout-helper-lowers-to-spawn.md)
+
+---
+
 ## Suggested First Implementation Sequence
 
 Recommended order for execution:
@@ -627,6 +660,7 @@ Recommended order for execution:
 5. `T20` to `T28`
 6. `T33` to `T35`
 7. `T41` to `T45`
+8. `T46` to `T47`
 
 This order prioritizes a working durable execution core before deeper control-flow features and before the thin SDK/demo layer.
 

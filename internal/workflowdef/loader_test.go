@@ -35,7 +35,7 @@ func TestLoadJSON(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`{
   "name": "linear-noop",
   "nodes": [
-    {"id": "A", "activity_type": "noop"},
+    {"id": "A", "activity_type": "noop", "input": {"message": "hello"}},
     {"id": "B", "activity_type": "noop", "depends_on": ["A"]}
   ]
 }`), 0o644); err != nil {
@@ -49,6 +49,9 @@ func TestLoadJSON(t *testing.T) {
 
 	if def.Name != "linear-noop" {
 		t.Fatalf("expected workflow name linear-noop, got %q", def.Name)
+	}
+	if got := def.Nodes[0].Input["message"]; got != "hello" {
+		t.Fatalf("expected node input to survive load, got %v", def.Nodes[0].Input)
 	}
 }
 

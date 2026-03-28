@@ -81,6 +81,7 @@ type NodeDefinition struct {
 	state                protoimpl.MessageState `protogen:"open.v1"`
 	Id                   string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	ActivityType         string                 `protobuf:"bytes,2,opt,name=activity_type,json=activityType,proto3" json:"activity_type,omitempty"`
+	Input                *structpb.Struct       `protobuf:"bytes,9,opt,name=input,proto3" json:"input,omitempty"`
 	DependsOn            []string               `protobuf:"bytes,3,rep,name=depends_on,json=dependsOn,proto3" json:"depends_on,omitempty"`
 	RetryPolicy          *RetryPolicy           `protobuf:"bytes,4,opt,name=retry_policy,json=retryPolicy,proto3" json:"retry_policy,omitempty"`
 	CompensationActivity string                 `protobuf:"bytes,5,opt,name=compensation_activity,json=compensationActivity,proto3" json:"compensation_activity,omitempty"`
@@ -133,6 +134,13 @@ func (x *NodeDefinition) GetActivityType() string {
 		return x.ActivityType
 	}
 	return ""
+}
+
+func (x *NodeDefinition) GetInput() *structpb.Struct {
+	if x != nil {
+		return x.Input
+	}
+	return nil
 }
 
 func (x *NodeDefinition) GetDependsOn() []string {
@@ -898,6 +906,7 @@ type WorkerTask struct {
 	Compensation  bool                   `protobuf:"varint,5,opt,name=compensation,proto3" json:"compensation,omitempty"`
 	Workflow      string                 `protobuf:"bytes,6,opt,name=workflow,proto3" json:"workflow,omitempty"`
 	WorkflowInput *structpb.Struct       `protobuf:"bytes,7,opt,name=workflow_input,json=workflowInput,proto3" json:"workflow_input,omitempty"`
+	NodeInput     *structpb.Struct       `protobuf:"bytes,8,opt,name=node_input,json=nodeInput,proto3" json:"node_input,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -977,6 +986,13 @@ func (x *WorkerTask) GetWorkflow() string {
 func (x *WorkerTask) GetWorkflowInput() *structpb.Struct {
 	if x != nil {
 		return x.WorkflowInput
+	}
+	return nil
+}
+
+func (x *WorkerTask) GetNodeInput() *structpb.Struct {
+	if x != nil {
+		return x.NodeInput
 	}
 	return nil
 }
@@ -1432,10 +1448,11 @@ const file_grael_proto_rawDesc = "" +
 	"\vgrael.proto\x12\bgrael.v1\x1a\x1egoogle/protobuf/duration.proto\x1a\x1bgoogle/protobuf/empty.proto\x1a\x1cgoogle/protobuf/struct.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"e\n" +
 	"\vRetryPolicy\x12!\n" +
 	"\fmax_attempts\x18\x01 \x01(\x05R\vmaxAttempts\x123\n" +
-	"\abackoff\x18\x02 \x01(\v2\x19.google.protobuf.DurationR\abackoff\"\xaf\x03\n" +
+	"\abackoff\x18\x02 \x01(\v2\x19.google.protobuf.DurationR\abackoff\"\xde\x03\n" +
 	"\x0eNodeDefinition\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12#\n" +
-	"\ractivity_type\x18\x02 \x01(\tR\factivityType\x12\x1d\n" +
+	"\ractivity_type\x18\x02 \x01(\tR\factivityType\x12-\n" +
+	"\x05input\x18\t \x01(\v2\x17.google.protobuf.StructR\x05input\x12\x1d\n" +
 	"\n" +
 	"depends_on\x18\x03 \x03(\tR\tdependsOn\x128\n" +
 	"\fretry_policy\x18\x04 \x01(\v2\x15.grael.v1.RetryPolicyR\vretryPolicy\x123\n" +
@@ -1498,7 +1515,7 @@ const file_grael_proto_rawDesc = "" +
 	"\x0fPollTaskRequest\x12\x1b\n" +
 	"\tworker_id\x18\x01 \x01(\tR\bworkerId\x12\x1d\n" +
 	"\n" +
-	"timeout_ms\x18\x02 \x01(\x03R\ttimeoutMs\"\xfb\x01\n" +
+	"timeout_ms\x18\x02 \x01(\x03R\ttimeoutMs\"\xb3\x02\n" +
 	"\n" +
 	"WorkerTask\x12\x15\n" +
 	"\x06run_id\x18\x01 \x01(\tR\x05runId\x12\x17\n" +
@@ -1507,7 +1524,9 @@ const file_grael_proto_rawDesc = "" +
 	"\aattempt\x18\x04 \x01(\rR\aattempt\x12\"\n" +
 	"\fcompensation\x18\x05 \x01(\bR\fcompensation\x12\x1a\n" +
 	"\bworkflow\x18\x06 \x01(\tR\bworkflow\x12>\n" +
-	"\x0eworkflow_input\x18\a \x01(\v2\x17.google.protobuf.StructR\rworkflowInput\"<\n" +
+	"\x0eworkflow_input\x18\a \x01(\v2\x17.google.protobuf.StructR\rworkflowInput\x126\n" +
+	"\n" +
+	"node_input\x18\b \x01(\v2\x17.google.protobuf.StructR\tnodeInput\"<\n" +
 	"\x10PollTaskResponse\x12(\n" +
 	"\x04task\x18\x01 \x01(\v2\x14.grael.v1.WorkerTaskR\x04task\"+\n" +
 	"\x11CheckpointRequest\x12\x16\n" +
@@ -1599,51 +1618,53 @@ var file_grael_proto_goTypes = []any{
 }
 var file_grael_proto_depIdxs = []int32{
 	23, // 0: grael.v1.RetryPolicy.backoff:type_name -> google.protobuf.Duration
-	0,  // 1: grael.v1.NodeDefinition.retry_policy:type_name -> grael.v1.RetryPolicy
-	23, // 2: grael.v1.NodeDefinition.checkpoint_timeout:type_name -> google.protobuf.Duration
-	23, // 3: grael.v1.NodeDefinition.execution_deadline:type_name -> google.protobuf.Duration
-	23, // 4: grael.v1.NodeDefinition.absolute_deadline:type_name -> google.protobuf.Duration
-	1,  // 5: grael.v1.WorkflowDefinition.nodes:type_name -> grael.v1.NodeDefinition
-	2,  // 6: grael.v1.StartRunRequest.workflow:type_name -> grael.v1.WorkflowDefinition
-	24, // 7: grael.v1.StartRunRequest.input:type_name -> google.protobuf.Struct
-	22, // 8: grael.v1.RunView.nodes:type_name -> grael.v1.RunView.NodesEntry
-	25, // 9: grael.v1.RunView.created_at:type_name -> google.protobuf.Timestamp
-	25, // 10: grael.v1.RunView.finished_at:type_name -> google.protobuf.Timestamp
-	25, // 11: grael.v1.Event.timestamp:type_name -> google.protobuf.Timestamp
-	24, // 12: grael.v1.WorkerTask.workflow_input:type_name -> google.protobuf.Struct
-	14, // 13: grael.v1.PollTaskResponse.task:type_name -> grael.v1.WorkerTask
-	24, // 14: grael.v1.CompleteTaskRequest.output:type_name -> google.protobuf.Struct
-	16, // 15: grael.v1.CompleteTaskRequest.checkpoint:type_name -> grael.v1.CheckpointRequest
-	1,  // 16: grael.v1.CompleteTaskRequest.spawned_nodes:type_name -> grael.v1.NodeDefinition
-	11, // 17: grael.v1.ListEventsResponse.events:type_name -> grael.v1.Event
-	8,  // 18: grael.v1.RunView.NodesEntry.value:type_name -> grael.v1.NodeView
-	3,  // 19: grael.v1.Grael.StartRun:input_type -> grael.v1.StartRunRequest
-	5,  // 20: grael.v1.Grael.CancelRun:input_type -> grael.v1.CancelRunRequest
-	6,  // 21: grael.v1.Grael.ApproveCheckpoint:input_type -> grael.v1.ApproveCheckpointRequest
-	7,  // 22: grael.v1.Grael.GetRun:input_type -> grael.v1.GetRunRequest
-	10, // 23: grael.v1.Grael.StreamEvents:input_type -> grael.v1.StreamEventsRequest
-	12, // 24: grael.v1.Grael.RegisterWorker:input_type -> grael.v1.RegisterWorkerRequest
-	13, // 25: grael.v1.Grael.PollTask:input_type -> grael.v1.PollTaskRequest
-	17, // 26: grael.v1.Grael.CompleteTask:input_type -> grael.v1.CompleteTaskRequest
-	18, // 27: grael.v1.Grael.FailTask:input_type -> grael.v1.FailTaskRequest
-	19, // 28: grael.v1.Grael.Heartbeat:input_type -> grael.v1.HeartbeatRequest
-	20, // 29: grael.v1.Grael.ListEvents:input_type -> grael.v1.ListEventsRequest
-	4,  // 30: grael.v1.Grael.StartRun:output_type -> grael.v1.StartRunResponse
-	26, // 31: grael.v1.Grael.CancelRun:output_type -> google.protobuf.Empty
-	26, // 32: grael.v1.Grael.ApproveCheckpoint:output_type -> google.protobuf.Empty
-	9,  // 33: grael.v1.Grael.GetRun:output_type -> grael.v1.RunView
-	11, // 34: grael.v1.Grael.StreamEvents:output_type -> grael.v1.Event
-	26, // 35: grael.v1.Grael.RegisterWorker:output_type -> google.protobuf.Empty
-	15, // 36: grael.v1.Grael.PollTask:output_type -> grael.v1.PollTaskResponse
-	26, // 37: grael.v1.Grael.CompleteTask:output_type -> google.protobuf.Empty
-	26, // 38: grael.v1.Grael.FailTask:output_type -> google.protobuf.Empty
-	26, // 39: grael.v1.Grael.Heartbeat:output_type -> google.protobuf.Empty
-	21, // 40: grael.v1.Grael.ListEvents:output_type -> grael.v1.ListEventsResponse
-	30, // [30:41] is the sub-list for method output_type
-	19, // [19:30] is the sub-list for method input_type
-	19, // [19:19] is the sub-list for extension type_name
-	19, // [19:19] is the sub-list for extension extendee
-	0,  // [0:19] is the sub-list for field type_name
+	24, // 1: grael.v1.NodeDefinition.input:type_name -> google.protobuf.Struct
+	0,  // 2: grael.v1.NodeDefinition.retry_policy:type_name -> grael.v1.RetryPolicy
+	23, // 3: grael.v1.NodeDefinition.checkpoint_timeout:type_name -> google.protobuf.Duration
+	23, // 4: grael.v1.NodeDefinition.execution_deadline:type_name -> google.protobuf.Duration
+	23, // 5: grael.v1.NodeDefinition.absolute_deadline:type_name -> google.protobuf.Duration
+	1,  // 6: grael.v1.WorkflowDefinition.nodes:type_name -> grael.v1.NodeDefinition
+	2,  // 7: grael.v1.StartRunRequest.workflow:type_name -> grael.v1.WorkflowDefinition
+	24, // 8: grael.v1.StartRunRequest.input:type_name -> google.protobuf.Struct
+	22, // 9: grael.v1.RunView.nodes:type_name -> grael.v1.RunView.NodesEntry
+	25, // 10: grael.v1.RunView.created_at:type_name -> google.protobuf.Timestamp
+	25, // 11: grael.v1.RunView.finished_at:type_name -> google.protobuf.Timestamp
+	25, // 12: grael.v1.Event.timestamp:type_name -> google.protobuf.Timestamp
+	24, // 13: grael.v1.WorkerTask.workflow_input:type_name -> google.protobuf.Struct
+	24, // 14: grael.v1.WorkerTask.node_input:type_name -> google.protobuf.Struct
+	14, // 15: grael.v1.PollTaskResponse.task:type_name -> grael.v1.WorkerTask
+	24, // 16: grael.v1.CompleteTaskRequest.output:type_name -> google.protobuf.Struct
+	16, // 17: grael.v1.CompleteTaskRequest.checkpoint:type_name -> grael.v1.CheckpointRequest
+	1,  // 18: grael.v1.CompleteTaskRequest.spawned_nodes:type_name -> grael.v1.NodeDefinition
+	11, // 19: grael.v1.ListEventsResponse.events:type_name -> grael.v1.Event
+	8,  // 20: grael.v1.RunView.NodesEntry.value:type_name -> grael.v1.NodeView
+	3,  // 21: grael.v1.Grael.StartRun:input_type -> grael.v1.StartRunRequest
+	5,  // 22: grael.v1.Grael.CancelRun:input_type -> grael.v1.CancelRunRequest
+	6,  // 23: grael.v1.Grael.ApproveCheckpoint:input_type -> grael.v1.ApproveCheckpointRequest
+	7,  // 24: grael.v1.Grael.GetRun:input_type -> grael.v1.GetRunRequest
+	10, // 25: grael.v1.Grael.StreamEvents:input_type -> grael.v1.StreamEventsRequest
+	12, // 26: grael.v1.Grael.RegisterWorker:input_type -> grael.v1.RegisterWorkerRequest
+	13, // 27: grael.v1.Grael.PollTask:input_type -> grael.v1.PollTaskRequest
+	17, // 28: grael.v1.Grael.CompleteTask:input_type -> grael.v1.CompleteTaskRequest
+	18, // 29: grael.v1.Grael.FailTask:input_type -> grael.v1.FailTaskRequest
+	19, // 30: grael.v1.Grael.Heartbeat:input_type -> grael.v1.HeartbeatRequest
+	20, // 31: grael.v1.Grael.ListEvents:input_type -> grael.v1.ListEventsRequest
+	4,  // 32: grael.v1.Grael.StartRun:output_type -> grael.v1.StartRunResponse
+	26, // 33: grael.v1.Grael.CancelRun:output_type -> google.protobuf.Empty
+	26, // 34: grael.v1.Grael.ApproveCheckpoint:output_type -> google.protobuf.Empty
+	9,  // 35: grael.v1.Grael.GetRun:output_type -> grael.v1.RunView
+	11, // 36: grael.v1.Grael.StreamEvents:output_type -> grael.v1.Event
+	26, // 37: grael.v1.Grael.RegisterWorker:output_type -> google.protobuf.Empty
+	15, // 38: grael.v1.Grael.PollTask:output_type -> grael.v1.PollTaskResponse
+	26, // 39: grael.v1.Grael.CompleteTask:output_type -> google.protobuf.Empty
+	26, // 40: grael.v1.Grael.FailTask:output_type -> google.protobuf.Empty
+	26, // 41: grael.v1.Grael.Heartbeat:output_type -> google.protobuf.Empty
+	21, // 42: grael.v1.Grael.ListEvents:output_type -> grael.v1.ListEventsResponse
+	32, // [32:43] is the sub-list for method output_type
+	21, // [21:32] is the sub-list for method input_type
+	21, // [21:21] is the sub-list for extension type_name
+	21, // [21:21] is the sub-list for extension extendee
+	0,  // [0:21] is the sub-list for field type_name
 }
 
 func init() { file_grael_proto_init() }

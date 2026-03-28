@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"time"
@@ -99,6 +100,7 @@ func NormalizeNode(node rt.NodeDefinition) (rt.NodeDefinition, error) {
 	return rt.NodeDefinition{
 		ID:                   node.ID,
 		ActivityType:         node.ActivityType,
+		Input:                maps.Clone(node.Input),
 		DependsOn:            append([]string(nil), node.DependsOn...),
 		RetryPolicy:          normalizeRetryPolicy(node.RetryPolicy),
 		CompensationActivity: node.CompensationActivity,

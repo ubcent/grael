@@ -33,6 +33,7 @@ message RetryPolicy {
 message NodeDefinition {
   string id = 1;
   string activity_type = 2;
+  google.protobuf.Struct input = 9;
   repeated string depends_on = 3;
   RetryPolicy retry_policy = 4;
   string compensation_activity = 5;
@@ -120,6 +121,7 @@ message WorkerTask {
   bool compensation = 5;
   string workflow = 6;
   google.protobuf.Struct workflow_input = 7;
+  google.protobuf.Struct node_input = 8;
 }
 
 message PollTaskResponse {

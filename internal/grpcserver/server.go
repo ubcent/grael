@@ -185,6 +185,10 @@ func nodeDefinitionFromProto(node *pb.NodeDefinition) (rt.NodeDefinition, error)
 	if node == nil {
 		return rt.NodeDefinition{}, errors.New("node definition is required")
 	}
+	input, err := structToMap(node.GetInput())
+	if err != nil {
+		return rt.NodeDefinition{}, fmt.Errorf("input: %w", err)
+	}
 	checkpointTimeout, err := durationFromProto(node.GetCheckpointTimeout())
 	if err != nil {
 		return rt.NodeDefinition{}, fmt.Errorf("checkpoint_timeout: %w", err)
@@ -201,6 +205,7 @@ func nodeDefinitionFromProto(node *pb.NodeDefinition) (rt.NodeDefinition, error)
 	return rt.NodeDefinition{
 		ID:                   node.GetId(),
 		ActivityType:         rt.ActivityType(node.GetActivityType()),
+		Input:                input,
 		DependsOn:            append([]string(nil), node.GetDependsOn()...),
 		RetryPolicy:          retryPolicyFromProto(node.GetRetryPolicy()),
 		CompensationActivity: rt.ActivityType(node.GetCompensationActivity()),
@@ -275,6 +280,10 @@ func workerTaskToProto(task rt.WorkerTask) (*pb.WorkerTask, error) {
 	if err != nil {
 		return nil, fmt.Errorf("workflow input: %w", err)
 	}
+	nodeInput, err := mapToStruct(task.NodeInput)
+	if err != nil {
+		return nil, fmt.Errorf("node input: %w", err)
+	}
 	return &pb.WorkerTask{
 		RunId:         task.RunID,
 		NodeId:        task.NodeID,
@@ -283,6 +292,7 @@ func workerTaskToProto(task rt.WorkerTask) (*pb.WorkerTask, error) {
 		Compensation:  task.Compensation,
 		Workflow:      task.Workflow,
 		WorkflowInput: input,
+		NodeInput:     nodeInput,
 	}, nil
 }
 

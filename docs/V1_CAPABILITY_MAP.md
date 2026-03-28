@@ -301,19 +301,25 @@ Freeze the smallest workable authoring contract for workflows and worker handler
 
 - workflow definition shape
 - node definition shape
+- node-scoped input payload shape
 - dependency declaration
 - retry/deadline/checkpoint/compensation config
 - definition hash captured at run start
 - thin Go SDK seam for worker registration and task handling
+- thin Go SDK helper for fan-out-via-spawn
 
 ### Acceptance Shape
 
 - workflows are expressive enough for the core v1 demos
+- workers can receive stable per-node input without inventing a second input channel
+- fan-out convenience remains a lowering to ordinary spawned nodes rather than a second orchestration model
 - activity compatibility is handled by naming, not version routing
 
 ### Key Risks
 
 - over-designing the definition registry before end-to-end execution works
+- adding a fan-out abstraction that drifts away from living-DAG spawn semantics
+- introducing hidden node input state that is not captured in the workflow definition and event history
 
 ---
 
