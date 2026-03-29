@@ -49,7 +49,7 @@ Do not pull these into Sprint 7.1:
 - dedicated fan-out failure policies
 - per-item compensation tracking beyond ordinary spawned-node semantics
 - dependency output aggregation redesign
-- memory/profile injection beyond explicit workflow or node input fields
+- OmnethDB-owned memory/profile behavior beyond explicit workflow or node input fields
 
 ---
 

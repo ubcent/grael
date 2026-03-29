@@ -1,5 +1,10 @@
 # Grael — Architecture
 
+> Note
+> Memory-layer material in this document is historical and no longer part of Grael's active product scope.
+> The memory/knowledge product now lives separately as `OmnethDB`.
+> In Grael, integration with OmnethDB happens only through explicit workflow input, node input, and external worker/API calls.
+
 ## What Grael is
 
 Grael is a workflow engine built for AI agents.

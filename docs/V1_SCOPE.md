@@ -113,9 +113,9 @@ Everything below is either killed entirely or replaced with a primitive.
 
 ---
 
-### 3.1 Memory Layer — KILL ENTIRELY FOR v1
+### 3.1 Memory Layer — MOVE OUT OF GRAEL INTO OMNETHDB
 
-This is the most important cut. The memory layer is not a feature of Grael. **It is a separate product.** A versioned knowledge graph with embeddings, HNSW, BM25 fallback, relationship confidence scoring, and async embedding pipeline is a significant system on its own. Supermemory built a whole startup around it.
+This is the most important boundary. The memory layer is not a feature of Grael. **It is a separate product called OmnethDB.** A versioned knowledge graph with embeddings, HNSW, BM25 fallback, relationship confidence scoring, and async embedding pipeline is a significant system on its own.
 
 **Kill:**
 - Everything in `MemoryStore` interface
@@ -127,10 +127,12 @@ This is the most important cut. The memory layer is not a feature of Grael. **It
 - `GetProfile`, `Recall`, `Remember`, `Forget`
 
 **Replace with:**
-- `StepContext.Input` carries whatever the caller put in `StartWorkflow.Input`. If a worker needs memory, it queries its own memory service. Grael doesn't care.
-- Document the integration point: "inject memory profile into workflow input at start time."
+- `StepContext.Input` carries whatever the caller put in `StartWorkflow.Input`.
+- `Task.NodeInput` carries whatever node-scoped context the caller or upstream worker declared.
+- If a worker needs memory, it queries OmnethDB directly or receives OmnethDB-derived context through workflow input or node input. Grael does not own that memory system.
+- Document the integration point explicitly: "fetch from OmnethDB outside Grael, then inject the needed context through workflow or node input."
 
-**Why this is not cowardice:** The living DAG + durable execution is already a complete, shippable product without memory. Adding memory in v1 means you ship neither properly.
+**Why this is not cowardice:** The living DAG + durable execution is already a complete, shippable product without an embedded memory system. Trying to ship Grael and OmnethDB as one codebase means you ship neither properly.
 
 ---
 
@@ -221,7 +223,7 @@ The conformance test matrix in the spec is for when there are multiple implement
 
 ### 3.11 `UnsafeRefreshOnBoundary` Memory Mode — MOOT
 
-Already killed with the memory layer. Nothing to cut.
+Already moved out with the OmnethDB boundary. Nothing to cut inside Grael.
 
 ---
 
@@ -283,9 +285,9 @@ Already killed. But worth noting: the real fake complexity here is designing a p
 
 ---
 
-### 4.7 Relationship Confidence Scoring in Memory Layer
+### 4.7 Relationship Confidence Scoring in OmnethDB
 
-Already killed with the memory layer. But the reason it's fake complexity in v1: you haven't shipped a single workflow yet. You don't know which memories matter and by how much. Confidence scoring is an optimization of a system you don't have.
+Already moved out with OmnethDB. But the reason it's fake complexity in Grael scope is the same: you haven't shipped a single workflow yet. You don't know which memories matter and by how much. Confidence scoring is an optimization of a different system.
 
 ---
 
@@ -308,11 +310,11 @@ Temporal runs at Stripe, Netflix, Descript, Airbyte, and hundreds of other compa
 The honest differentiation Grael has against Temporal:
 1. **No external database.** Temporal requires a database (Postgres or Cassandra) and a separate service. Grael is one binary. This is genuinely valuable for self-hosted, air-gapped, or resource-constrained deployments.
 2. **Living DAG as a first-class concept.** Temporal's dynamic workflows work by re-executing workflow code with a replay flag — this is conceptually fragile and limits what agents can express. Grael's data-driven DAG has no equivalent replay problem.
-3. **Built specifically for AI agent orchestration.** Temporal was designed for microservice orchestration. Grael's primitives (spawn, checkpoint, memory) match how AI pipelines actually work.
+3. **Built specifically for AI agent orchestration.** Temporal was designed for microservice orchestration. Grael's primitives (spawn, checkpoint, explicit task input) match how AI pipelines actually work, and it can pair cleanly with OmnethDB as a separate memory product.
 
-If Grael v1 doesn't demonstrate #1 and #2 clearly, there is no product. #3 requires the memory layer which is cut. So v1 differentiates on: single binary, no external deps, living DAG.
+If Grael v1 doesn't demonstrate #1 and #2 clearly, there is no product. Grael's differentiator is the durable living-DAG engine. OmnethDB may strengthen the overall story, but it is now a separate product boundary rather than an internal Grael subsystem.
 
-**Risk:** This is a narrow differentiation. "Temporal but simpler and single-binary" is a valid product but not a category-defining one. The category-defining version requires the memory layer. Which means the memory layer, cut for v1, is actually the long-term bet. v1 must be positioned carefully.
+**Risk:** This is a narrower differentiation than "engine + memory in one box." That is acceptable only if Grael and OmnethDB are positioned honestly as separate but complementary products.
 
 ---
 
@@ -324,18 +326,18 @@ The honest answer: for Python AI engineers, LangGraph will be their first choice
 
 ---
 
-### 5.3 The Memory Layer Is the Actual Product Differentiator
+### 5.3 OmnethDB Is The Separate Long-Term Companion Bet
 
 Here is the uncomfortable truth: the "living DAG" is cool. The event sourcing is correct. But neither of these makes Grael irreplaceable.
 
-What makes Grael irreplaceable for AI pipelines is a memory layer that:
+What may make the broader product story irreplaceable for AI pipelines is a separate memory product that:
 - Remembers what worked and what didn't across runs
 - Lets agents get smarter over time
-- Is fully integrated with the execution engine (memory is first-class, not bolted on)
+- Pairs tightly with the execution engine without collapsing product boundaries
 
-This is the part no one else has. Temporal doesn't have it. LangGraph has a basic form of it but it's not engine-integrated. Without this, Grael is "correct workflow engine" — a nice property, not a category.
+That product is no longer Grael itself. It is OmnethDB. Grael without OmnethDB is still a real product: a correct durable execution engine. OmnethDB without Grael may also become a real product. They should be designed to integrate cleanly, not to blur into one repo and one scope line again.
 
-**Implication for v1:** Ship the engine fast and well. Get users. Use the feedback to design the memory layer correctly. The memory layer in the current spec was designed in a vacuum. Real workflows will tell you what memory primitives actually need to be.
+**Implication for v1:** Ship Grael fast and well. Get users. Use the feedback to design OmnethDB correctly. The old embedded memory-layer design was drafted before real workflow usage existed. Real workflows should now inform the OmnethDB contract instead of distorting Grael's scope.
 
 ---
 
@@ -587,7 +589,7 @@ The key moments:
 - A human approval that doesn't block the rest of the graph
 - The complete event history
 
-None of these require the memory layer. All of these are possible with v1.
+None of these require an embedded memory product. All of these are possible with Grael v1 alone.
 
 ---
 
@@ -597,7 +599,7 @@ Strictly forbidden until the core demo above is running and at least 3 real user
 
 | Forbidden | Why |
 |-----------|-----|
-| Memory layer / embeddings / HNSW | Separate product; build after you understand what memory AI agents actually need |
+| OmnethDB / embeddings / HNSW | Separate product; build after you understand what memory AI agents actually need |
 | mTLS / RBAC / multi-tenancy | Premature platform-building; use a shared secret |
 | Sub-workflows | Complex correctness; solve with worker-initiated `StartRun` |
 | Multiple projection modes | You have `GetRun` and `ListEvents`; that's enough |

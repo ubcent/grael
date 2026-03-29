@@ -43,7 +43,7 @@ It gives:
 
 without dragging in:
 
-- memory-layer work
+- OmnethDB or memory-product work
 - broader platform features
 - advanced multi-tenant or security features
 - non-v1 extensions such as sub-workflows or richer policy engines
@@ -56,7 +56,7 @@ This is the right final slice because the system should already work by this poi
 
 Do not pull these into Sprint 5:
 
-- memory system work
+- OmnethDB work
 - sub-workflows
 - advanced auth, RBAC, or multi-tenancy
 - projection systems beyond `GetRun` and `ListEvents`

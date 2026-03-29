@@ -19,6 +19,8 @@ For v1 planning, documents should be interpreted in this order:
 
 If `docs/GRAEL_RUNTIME_SPEC.md` conflicts with `docs/V1_SCOPE.md`, v1 planning follows `docs/V1_SCOPE.md`.
 
+Memory-related material in the broad architecture/spec documents should be treated as historical after the OmnethDB split. See `docs/adr/0015-memory-layer-belongs-to-omnethdb-not-grael.md`, `docs/OMNETHDB_BOUNDARY.md`, and `docs/archive/README.md`.
+
 ---
 
 ## Product Definition
@@ -42,7 +44,7 @@ Grael v1 is not:
 
 - a generic workflow platform
 - a multi-tenant control plane
-- a memory system
+- a memory system; that companion product now lives in OmnethDB
 - a workflow migration platform
 - a full-blown policy engine
 
@@ -72,8 +74,8 @@ Grael v1 is not:
 | Compensation | Keep | Sequential, basic saga-style compensation only |
 | Compensation on cancel | Keep | Optional config, but within v1 |
 | Checkpoints | Keep | Included in late v1; minimal approval flow only |
-| Memory layer | Cut | Entirely out of v1 |
-| Memory refresh modes | Cut | Entirely out of v1 |
+| Memory layer | Cut | Entirely outside Grael; belongs to OmnethDB |
+| Memory refresh modes | Cut | Not a Grael concern; any freshness policy belongs to OmnethDB and caller-controlled input |
 | Sub-workflows | Cut | Entirely out of v1 |
 | Activity version ranges | Cut | Use activity type strings only |
 | Error handler branch | Cut | No `HANDLING_ERROR`, no handler event family |
@@ -170,7 +172,7 @@ The following capabilities define the actual Grael v1 implementation surface:
 
 The following areas are intentionally excluded from v1 planning and should not generate first-wave backlog:
 
-- memory store and memory profile injection
+- OmnethDB internals such as memory store, profile assembly, and refresh policy
 - embeddings, HNSW, BM25, relationship scoring
 - sub-workflows and parent-child propagation
 - activity capability version matching

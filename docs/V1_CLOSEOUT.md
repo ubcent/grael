@@ -51,7 +51,7 @@ The implemented v1 baseline includes:
 
 The following remain intentionally outside the v1 contract:
 
-- memory-layer work
+- OmnethDB or memory-product work
 - sub-workflows
 - admission queueing
 - version-range routing

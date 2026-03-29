@@ -42,7 +42,7 @@ If any answer is "maybe", the design is not ready.
 
 Confirm that the change does not accidentally introduce:
 
-- memory-layer behavior
+- OmnethDB or Grael-owned memory-layer behavior
 - sub-workflows
 - admission queues
 - error-handler branches

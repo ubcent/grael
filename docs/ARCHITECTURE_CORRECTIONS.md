@@ -1,5 +1,9 @@
 # Grael — Final Semantic Corrections
 
+> Note
+> Memory-related corrections in this document are historical after the OmnethDB split.
+> Grael no longer owns a built-in memory subsystem; use these sections only as background context for older design history.
+
 Precision pass on correctness edge cases. Does not repeat prior specifications.
 Corrects specific semantic errors and ambiguities in `ARCHITECTURE.md` and `ARCHITECTURE_ADDENDUM.md`.
 

@@ -1,5 +1,9 @@
 # Grael — Architecture Addendum
 
+> Note
+> Any memory-layer sections in this addendum are historical and superseded by the OmnethDB product split.
+> They should not be treated as an active implementation plan for Grael.
+
 This document is a second-pass refinement of `ARCHITECTURE.md`. It does not repeat what is already specified. It closes architectural gaps that remain after the first pass and would prevent Grael from being a correct, predictable, production-grade runtime.
 
 ---

@@ -8,6 +8,11 @@ This document is the authoritative runtime semantics specification for the Grael
 
 Conforming implementations MUST satisfy every MUST/MUST NOT clause. MAY and SHOULD clauses describe recommended behavior.
 
+> Note
+> Sections of this document that describe a built-in Grael memory subsystem are now historical after the OmnethDB split.
+> Grael's active product boundary stops at explicit workflow input, node input, and external integration surfaces.
+> If you need the current boundary, use `docs/adr/0015-memory-layer-belongs-to-omnethdb-not-grael.md` and `docs/OMNETHDB_BOUNDARY.md` instead of Section 13 below.
+
 ---
 
 ## Table of Contents

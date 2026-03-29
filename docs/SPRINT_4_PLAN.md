@@ -72,7 +72,7 @@ Do not pull these into Sprint 4:
 
 - `RevokeAndAbandon` style force-cancel behavior
 - sub-workflows
-- memory-layer behavior
+- OmnethDB or memory-product behavior
 - advanced policy engines
 - richer compensation modes such as parallel unwind
 - Go SDK expansion

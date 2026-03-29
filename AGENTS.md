@@ -156,7 +156,7 @@ These rules apply to every human and every agent working in this repository.
 
 ### Scope Guardrails
 
-- no memory-layer work in v1
+- no Grael-owned memory-layer work; memory lives in OmnethDB
 - no sub-workflows in v1
 - no admission queue in v1
 - no error-handler branch in v1

@@ -8,6 +8,13 @@ At its core, Grael is an append-only event log. Every state transition is an eve
 
 Built for the SDLC. Designed to be embedded. Ships as a single binary.
 
+Memory is no longer part of Grael itself. The memory/knowledge product now
+lives separately as `OmnethDB`; Grael integrates with it only through explicit
+workflow input, node input, and external worker/API calls.
+
+For the current product boundary, see
+`docs/OMNETHDB_BOUNDARY.md`.
+
 ---
 
 ## Quick Start

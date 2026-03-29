@@ -22,6 +22,7 @@ This file tracks Architecture Decision Records for Grael.
 | `0012` | [Visual Demo Must Be A Read-Only Event-Derived Surface](./0012-visual-demo-must-be-a-read-only-event-derived-surface.md) | `Accepted` | Keeps the post-v1 demo layer honest and non-authoritative |
 | `0013` | [gRPC Transport Must Remain A Thin Layer Over `api.Service`](./0013-grpc-transport-must-remain-a-thin-layer-over-api-service.md) | `Accepted` | Freezes the network transport boundary for the v1 service surface |
 | `0014` | [Node Input And SDK Fan-Out Must Remain Explicit Living-DAG Surfaces](./0014-node-input-and-sdk-fanout-must-remain-explicit-living-dag-surfaces.md) | `Accepted` | Closes authoring gaps without adding a second runtime model |
+| `0015` | [Memory Layer Belongs To OmnethDB, Not Grael](./0015-memory-layer-belongs-to-omnethdb-not-grael.md) | `Accepted` | Freezes the product boundary between the Grael engine and OmnethDB |
 
 ---
 
